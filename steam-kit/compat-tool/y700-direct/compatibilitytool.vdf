@@ -1,0 +1,13 @@
+"compatibilitytools"
+{
+  "compat_tools"
+  {
+    "y700_direct"
+    {
+      "install_path" "."
+      "display_name" "Y700 direct (no container)"
+      "from_oslist"  "linux"
+      "to_oslist"    "linux"
+    }
+  }
+}

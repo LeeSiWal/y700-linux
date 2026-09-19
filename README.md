@@ -2,7 +2,8 @@
 
 Research snapshot of running Ubuntu 26.04 (arm64) on the Lenovo Legion Y700 gen-4 tablet (TB323FU, Snapdragon 8
 Elite / Adreno 840) with its stock **Android GKI 6.12 kernel and vendor modules**, a touch desktop, x86 apps through
-FEX-Emu, Vulkan through turnip (KGSL), and — as of this snapshot — **the Steam client up to the login window**.
+FEX-Emu, Vulkan through turnip (KGSL), and **Steam with a native Linux game (Dead Cells) running GPU-accelerated
+(OpenGL via zink over turnip)**.
 
 > **Status: experimental, device-specific, not an installer.** Everything here was developed and verified on one
 > device. Paths are hard-coded (`/home/siwal/...`), several guards check values of that device, and device-specific
@@ -25,7 +26,8 @@ FEX-Emu, Vulkan through turnip (KGSL), and — as of this snapshot — **the Ste
 | Audio | Speaker playback through a custom GPR/AudioReach client (no ALSA/PipeWire path yet) |
 | Sensors / power | ADC thermals, charger limiter, suspend (freezer / device pass) experiments |
 | x86 | FEX-Emu 2609 with an Ubuntu 24.04 x86 RootFS; X11/Wayland GUI apps |
-| **Steam** | client updates, logs in, UI renders (software) — see `steam-kit/` |
+| **Steam** | client updates, logs in, library UI renders (software); native Linux games start through the `y700_direct` compatibility tool — see `steam-kit/` |
+| **Games** | Dead Cells (x86-64, OpenGL) renders on the Adreno 840: OpenGL -> zink (x86 Mesa) -> FEX Vulkan thunk -> turnip; GPU busy ~75 %. Input needs a gamepad/keyboard (not verified yet) |
 
 ## Steam on a kernel without user namespaces and System V IPC (`steam-kit/`)
 The GKI kernel has `CONFIG_USER_NS`, `CONFIG_PID_NS`, `CONFIG_SYSVIPC` and `CONFIG_POSIX_MQUEUE` disabled. Valve's
@@ -41,8 +43,20 @@ outside by `steam-kit/y700-steam.sh`:
    pressure-vessel container), with FEX thunks off, `VK_DRIVER_FILES` unset, `--disable-gpu*`, and **without** the
    sysvipc preload (an emulated `shmget` id breaks X11 MIT-SHM in the CEF GPU process -> SIGSEGV).
 4. `-no-cef-sandbox -cef-disable-gpu`.
-Known open issues: touch input in the Steam (X11/CEF) window, Korean glyphs in CEF until the CJK fonts are visible to
-the x86 RootFS, games not tested yet, games inheriting the sysvipc preload may hit the MIT-SHM problem.
+5. Games: Steam wraps native games in the Steam Linux Runtime container, which cannot start here either.
+   `steam-kit/compat-tool/y700-direct/` is a Steam compatibility tool (copy it to
+   `~/.local/share/Steam/compatibilitytools.d/`) that runs the game command directly; map a game to it in
+   Properties -> Compatibility, or in `config/config.vdf` `CompatToolMapping` (edit only while Steam is closed).
+   The tool sets `LIBGL_KOPPER_DRI2=1 MESA_LOADER_DRIVER_OVERRIDE=zink` (x86 OpenGL on the GPU through the FEX Vulkan
+   thunk; `Y700_GL=llvmpipe` to disable), the host turnip ICD and `MESA_VK_WSI_DEBUG=sw`.
+   Host requirement found on the way: the WSI turnip build needs `libxcb-keysyms1` installed system-wide (games reset
+   `LD_LIBRARY_PATH`, e.g. Dead Cells' `deadcells.sh`, which otherwise hides it from the thunk's host side).
+6. Fonts: CEF and x86 apps use the FEX RootFS fontconfig; copy Noto CJK into `~/.local/share/fonts` for Hangul/CJK.
+7. `steam-kit/fex-config/`: FEX thunk configs (`thunks-vkwl.json` adds the WaylandClient thunk for Wayland Vulkan
+   apps, `thunks-none.json` is used for the web helper).
+Known open issues: touch input in the Steam (X11/CEF) window; `steam://rungameid` requests are ignored (click Play);
+the hidden main window turns black under Phosh after it is closed; gamepads need Bluetooth or a USB hub plus device
+permissions (the session is not a logind session); Proton (Windows games) not done yet; high SoC temperature under load.
 
 ## Layout
 - `design/nextboot-impl/` — bring-up orchestrator, bundle builder/loader, guards (bootguard, registry), DRM helpers

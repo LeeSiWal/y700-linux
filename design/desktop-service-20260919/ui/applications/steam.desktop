@@ -7,3 +7,4 @@ Icon=/home/siwal/y700-steam/launcher/usr/share/icons/hicolor/256x256/apps/steam.
 Categories=Game;
 X-Purism-FormFactor=Workstation;Mobile;
 Terminal=false
+StartupWMClass=steam

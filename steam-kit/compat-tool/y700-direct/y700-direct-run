@@ -1,0 +1,19 @@
+#!/bin/bash
+# Steam compatibility tool for the Y700: runs native Linux games WITHOUT the Steam Linux Runtime container
+# (the kernel has no user/pid namespaces, pressure-vessel cannot build it). Usage from Steam: y700-direct-run VERB -- CMD...
+# OpenGL goes to the GPU through zink over the FEX Vulkan thunk (Adreno/turnip) unless Y700_GL=llvmpipe.
+L=/home/siwal/y700-agent/y700-direct-$(date +%Y%m%d).log
+{ printf '%s verb=%s cmd:' "$(date +%T)" "$1"; printf ' %q' "${@:2}"; echo; } >> "$L"
+verb=$1; shift; [ "$1" = "--" ] && shift
+case "$verb" in
+  waitforexitandrun|run|waitforexit) ;;
+  *) exit 0 ;;                                   # getcompatpath/getnativepath etc.: nothing to translate
+esac
+# what Steam hands to games (for diagnosis)
+env | grep -E '^(VK_|FEX_|LD_|MESA|LIBGL|GALLIUM|DISPLAY|WAYLAND|XDG_RUNTIME|STEAM_RUNTIME=|SDL_)' | sed 's/^/  env /' >> "$L"
+# the host turnip ICD for the FEX Vulkan thunk, thunks on (the web helper runs with thunks off), software WSI present
+export VK_DRIVER_FILES=/home/siwal/y700-gpu/turnip-kgsl-26.2.3-wsi/share/vulkan/icd.d/freedreno_icd.aarch64.json
+export MESA_VK_WSI_DEBUG=sw
+unset FEX_THUNKCONFIG VK_ICD_FILENAMES
+if [ "${Y700_GL:-zink}" = zink ]; then export LIBGL_KOPPER_DRI2=1 MESA_LOADER_DRIVER_OVERRIDE=zink; fi
+exec "$@" >> "$L" 2>&1

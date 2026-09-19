@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=x86 vkcube (FEX + turnip)
+Exec=env FEX_THUNKCONFIG=/home/siwal/.fex-emu/thunks-vkwl.json FEXBash -c vkcube-wayland
+Terminal=false
+Icon=applications-games

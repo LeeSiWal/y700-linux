@@ -1,0 +1,6 @@
+# started by labwc for every desktop start (y700-desktop.service)
+UI=/home/siwal/y700-design/desktop-service-20260919/ui
+swaybg -c '#1f2d44' >/dev/null 2>&1 &
+waybar -c $UI/waybar.json -s $UI/waybar.css >/dev/null 2>&1 &
+mako >/dev/null 2>&1 &
+wvkbd-mobintl --hidden -L 320 >/dev/null 2>&1 &

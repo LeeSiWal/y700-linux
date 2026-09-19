@@ -1,0 +1,8 @@
+{
+ "rotation": 270,
+ "shell": "phosh",
+ "touch_offsets": {
+  "270": 180
+ },
+ "resolution": 67
+}

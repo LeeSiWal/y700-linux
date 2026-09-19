@@ -1,0 +1,23 @@
+#!/bin/bash
+# y700 stand-in for the Steam Linux Runtime entry point (pressure-vessel) used by steamwebhelper.sh via
+# STEAM_RUNTIME_STEAMRT: the kernel cannot build the container (no user/pid namespaces), so the command after "--"
+# runs directly on the FEX RootFS (Ubuntu 24.04 provides all 42 libraries steamwebhelper/libcef.so need).
+[ -n "${Y700_FAKE_BWRAP_LOG-}" ] && printf '%s entry-point' "$(date +%T)" >> "$Y700_FAKE_BWRAP_LOG" && printf ' %q' "$@" >> "$Y700_FAKE_BWRAP_LOG" && echo >> "$Y700_FAKE_BWRAP_LOG"
+while [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done
+[ "$1" = "--" ] && shift
+[ $# -gt 0 ] || { echo "_v2-entry-point: no command" >&2; exit 125; }
+# the web helper's GPU process crashed (SIGSEGV x6, "GPU process isn't usable") right after FEX linked the Vulkan
+# thunk; without thunks it falls back to software rendering. Scoped to the web helper tree (games keep thunks).
+export FEX_THUNKCONFIG=/home/siwal/.fex-emu/thunks-none.json
+# the session exports VK_DRIVER_FILES (host turnip ICD for thunked apps); it overrides the ICD choice of the web
+# helper's own SwiftShader (SwANGLE: "Extension not supported: VK_KHR_surface") -> let it use its bundled ICD
+unset VK_DRIVER_FILES VK_ICD_FILENAMES MESA_VK_WSI_DEBUG
+# no sysvipc-emu in the web helper tree (confirmed 23:39: login window appears) (its GPU process presents through X11 MIT-SHM; an emulated shmget id
+# cannot be attached by Xwayland -> suspected SIGSEGV; with ENOSYS Chromium falls back to XPutImage)
+unset LD_PRELOAD
+# SwiftShader (SwANGLE) in the GPU process also crashed (SIGSEGV x6) under FEX: no GL at all, plain software
+# compositing (the web helper passes Chromium switches through to its children)
+case "$1" in */steamwebhelper_sniper_wrap.sh|*/steamwebhelper)
+    set -- "$@" --disable-gpu --disable-gpu-compositing --disable-software-rasterizer ;;
+esac
+exec "$@"

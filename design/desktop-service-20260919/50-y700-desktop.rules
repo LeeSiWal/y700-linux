@@ -1,0 +1,16 @@
+// y700-desktop: the labwc session is not a logind session, so polkit treats it as inactive and NetworkManager / blueman
+// ask for admin auth that no agent can show. Allow ONLY these actions for user siwal (network + bluetooth settings).
+polkit.addRule(function(action, subject) {
+    var allowed = [
+        "org.freedesktop.NetworkManager.network-control",
+        "org.freedesktop.NetworkManager.wifi.scan",
+        "org.freedesktop.NetworkManager.enable-disable-wifi",
+        "org.freedesktop.NetworkManager.settings.modify.own",
+        "org.freedesktop.NetworkManager.settings.modify.system",
+        "org.blueman.rfkill.setstate",
+        "org.blueman.bluez.config"
+    ];
+    if (subject.user == "siwal" && allowed.indexOf(action.id) >= 0) {
+        return polkit.Result.YES;
+    }
+});

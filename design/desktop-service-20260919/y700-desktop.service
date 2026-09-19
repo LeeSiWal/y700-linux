@@ -1,0 +1,26 @@
+[Unit]
+Description=Y700 labwc desktop (headless output + two-plane presenter on the display owner's DRM file)
+Documentation=file:/home/siwal/y700-design/desktop-service-20260919/DESIGN.md
+After=y700-bringup.service
+ConditionPathExists=!/home/siwal/y700-agent/desktop.disable
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+Type=exec
+# waits for bring-up (owner+gpu ok, <= 15 min), sets /dev/kgsl-3d0 0666, recovers its own leftover FBs, then runs
+ExecStart=/usr/bin/python3 -B /home/siwal/y700-design/desktop-service-20260919/desktop-service.py
+RuntimeDirectory=y700-desktop y700-desktop-state
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+Restart=on-failure
+RestartSec=10
+RestartPreventExitStatus=3
+# SIGTERM to the presenter only: it stops labwc, restores the native layout and removes its FBs
+KillMode=mixed
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

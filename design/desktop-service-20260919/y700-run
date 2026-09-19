@@ -1,0 +1,21 @@
+#!/bin/bash
+# Start a program inside the running y700-desktop session (as siwal, e.g. over SSH). Detached; output to a log.
+#   y700-run [--x86] [--wl-thunk] CMD [ARGS...]
+#   --x86       run through FEXBash (x86-64 program from the FEX rootfs)
+#   --wl-thunk  FEX WaylandClient thunk as well (x86 Vulkan apps using the Wayland WSI, e.g. vkcube-wayland)
+set -euo pipefail
+HERE=$(dirname "$(readlink -f "$0")"); RUN=/run/y700-desktop
+x86=0; wlt=0
+while [ $# -gt 0 ]; do case "$1" in --x86) x86=1; shift;; --wl-thunk) wlt=1; shift;; --) shift; break;; *) break;; esac; done
+[ $# -gt 0 ] || { echo "usage: y700-run [--x86] [--wl-thunk] CMD [ARGS...]" >&2; exit 2; }
+[ "$(id -u)" = 1000 ] || { echo "run as siwal" >&2; exit 2; }
+sock=$(ls "$RUN" 2>/dev/null | grep -E '^wayland-[0-9]+$' | head -1 || true)
+[ -n "$sock" ] || { echo "desktop not running (no socket in $RUN)" >&2; exit 1; }
+while IFS='=' read -r k v; do [[ "$k" =~ ^[A-Z_]+$ ]] && export "$k=$v"; done < "$HERE/labwc-config/environment"
+export XDG_RUNTIME_DIR=$RUN WAYLAND_DISPLAY=$sock DISPLAY=:0
+[ $wlt = 1 ] && export FEX_THUNKCONFIG=/home/siwal/.fex-emu/thunks-vkwl.json
+boot=$(cut -c1-8 /proc/sys/kernel/random/boot_id); log=/home/siwal/y700-agent/y700-run-$boot.log
+if [ $x86 = 1 ]; then set -- FEXBash -c "$(printf '%q ' "$@")"; fi
+echo "=== $(date '+%F %T') $*" >> "$log"
+setsid "$@" >> "$log" 2>&1 < /dev/null &
+echo "started pid $! (log $log)"

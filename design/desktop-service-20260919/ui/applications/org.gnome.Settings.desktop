@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Settings
+Comment=GNOME Settings (run as GNOME: it refuses other desktops)
+Exec=env XDG_CURRENT_DESKTOP=GNOME gnome-control-center
+Icon=org.gnome.Settings
+Terminal=false

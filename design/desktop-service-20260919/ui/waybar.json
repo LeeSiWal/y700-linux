@@ -1,0 +1,144 @@
+[
+ {
+  "name": "controls",
+  "layer": "top",
+  "position": "top",
+  "height": 40,
+  "spacing": 4,
+  "modules-left": [
+   "custom/apps",
+   "custom/rotate",
+   "custom/kbd",
+   "custom/dim",
+   "custom/light",
+   "custom/bright",
+   "custom/wifi",
+   "custom/bt"
+  ],
+  "modules-center": [
+   "clock"
+  ],
+  "modules-right": [
+   "network",
+   "battery"
+  ],
+  "custom/apps": {
+   "format": "Apps",
+   "on-click": "fuzzel",
+   "tooltip": false
+  },
+  "custom/rotate": {
+   "format": "Rotate",
+   "on-click": "/home/siwal/y700-design/desktop-service-20260919/y700-ctl rotate next",
+   "tooltip": false
+  },
+  "custom/kbd": {
+   "format": "Keyboard",
+   "on-click": "pkill -SIGRTMIN -x wvkbd-mobintl",
+   "tooltip": false
+  },
+  "custom/dim": {
+   "format": " - ",
+   "on-click": "/home/siwal/y700-design/desktop-service-20260919/y700-ctl brightness down",
+   "tooltip": false
+  },
+  "custom/light": {
+   "format": "{}%",
+   "exec": "/home/siwal/y700-design/desktop-service-20260919/y700-ctl brightness get | sed 's/^[a-z]* //'",
+   "interval": 3,
+   "tooltip": false
+  },
+  "custom/bright": {
+   "format": " + ",
+   "on-click": "/home/siwal/y700-design/desktop-service-20260919/y700-ctl brightness up",
+   "tooltip": false
+  },
+  "custom/wifi": {
+   "format": "Wi-Fi",
+   "on-click": "nm-connection-editor",
+   "tooltip": false
+  },
+  "custom/bt": {
+   "format": "BT",
+   "on-click": "blueman-manager",
+   "tooltip": false
+  },
+  "clock": {
+   "format": "{:%m-%d %H:%M}",
+   "interval": 30,
+   "tooltip": false
+  },
+  "network": {
+   "interface": "wlan0",
+   "format-wifi": "WiFi {signalStrength}%",
+   "format-ethernet": "LAN",
+   "format-disconnected": "offline",
+   "tooltip": false
+  },
+  "battery": {
+   "bat": "battery",
+   "adapter": "usb",
+   "format": "BAT {capacity}%",
+   "format-charging": "BAT {capacity}% +",
+   "interval": 30
+  }
+ },
+ {
+  "name": "apps",
+  "layer": "top",
+  "position": "bottom",
+  "height": 40,
+  "spacing": 4,
+  "modules-left": [
+   "custom/term",
+   "custom/files",
+   "custom/web",
+   "custom/settings",
+   "custom/x86term",
+   "wlr/taskbar"
+  ],
+  "modules-right": [
+   "cpu",
+   "memory"
+  ],
+  "custom/term": {
+   "format": "Terminal",
+   "on-click": "foot",
+   "tooltip": false
+  },
+  "custom/files": {
+   "format": "Files",
+   "on-click": "thunar",
+   "tooltip": false
+  },
+  "custom/web": {
+   "format": "Web",
+   "on-click": "env WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 epiphany",
+   "tooltip": false
+  },
+  "custom/settings": {
+   "format": "Settings",
+   "on-click": "env XDG_CURRENT_DESKTOP=GNOME gnome-control-center",
+   "tooltip": false
+  },
+  "custom/x86term": {
+   "format": "x86 Term",
+   "on-click": "FEXBash -c 'xterm -fa Monospace -fs 11'",
+   "tooltip": false
+  },
+  "wlr/taskbar": {
+   "format": "{title:.18}",
+   "on-click": "activate",
+   "on-click-middle": "close",
+   "tooltip": false
+  },
+  "cpu": {
+   "format": "CPU {usage}%",
+   "interval": 5
+  },
+  "memory": {
+   "format": "MEM {percentage}%",
+   "interval": 10
+  }
+ }
+]

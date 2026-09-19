@@ -1,0 +1,39 @@
+#!/bin/bash
+# y700 "bwrap" without namespaces (the kernel has no CONFIG_USER_NS / CONFIG_PID_NS): parses bubblewrap options,
+# applies only --setenv/--unsetenv/--clearenv/--chdir, writes the child pid to --info-fd/--json-status-fd, ignores
+# every mount/namespace option and runs the command directly. Used via PRESSURE_VESSEL_BWRAP for Steam's checks.
+# Y700_FAKE_BWRAP_LOG=<file> appends each invocation.
+[ -n "${Y700_FAKE_BWRAP_LOG-}" ] && printf '%s bwrap' "$(date +%T)" >> "$Y700_FAKE_BWRAP_LOG" && printf ' %q' "$@" >> "$Y700_FAKE_BWRAP_LOG" && echo >> "$Y700_FAKE_BWRAP_LOG"
+args=("$@"); out=(); info_fds=(); chdir=""
+i=0
+while [ $i -lt ${#args[@]} ]; do
+    a=${args[$i]}
+    case "$a" in
+        --) i=$((i+1)); break ;;
+        --args)                                   # NUL-separated extra arguments from an fd, inserted here
+            fd=${args[$((i+1))]}; extra=(); while IFS= read -r -d '' x; do extra+=("$x"); done < "/proc/self/fd/$fd"
+            args=("${args[@]:0:$i}" "${extra[@]}" "${args[@]:$((i+2))}"); continue ;;
+        --setenv) export "${args[$((i+1))]}=${args[$((i+2))]}"; i=$((i+3)); continue ;;
+        --unsetenv) unset "${args[$((i+1))]}"; i=$((i+2)); continue ;;
+        --clearenv) for v in $(compgen -e); do [ "$v" != PATH ] && unset "$v"; done; i=$((i+1)); continue ;;
+        --chdir) chdir=${args[$((i+1))]}; i=$((i+2)); continue ;;
+        --info-fd|--json-status-fd) info_fds+=("${args[$((i+1))]}"); i=$((i+2)); continue ;;
+        --version) echo "bubblewrap 0.11.0"; exit 0 ;;
+        --help) echo "usage: bwrap [OPTIONS...] [--] COMMAND [ARGS...]"; exit 0 ;;
+        # options with 3 arguments
+        --overlay) i=$((i+4)); continue ;;
+        # options with 2 arguments
+        --bind|--ro-bind|--dev-bind|--bind-try|--ro-bind-try|--dev-bind-try|--bind-fd|--ro-bind-fd|--symlink|--file|--bind-data|--ro-bind-data|--chmod)
+            i=$((i+3)); continue ;;
+        # options with 1 argument
+        --tmpfs|--proc|--dev|--dir|--mqueue|--remount-ro|--perms|--size|--uid|--gid|--hostname|--block-fd|--userns-block-fd|--sync-fd|--seccomp|--add-seccomp-fd|--lock-file|--exec-label|--file-label|--cap-add|--cap-drop|--userns|--userns2|--pidns|--overlay-src|--tmp-overlay|--ro-overlay|--argv0|--level-prefix)
+            i=$((i+2)); continue ;;
+        --*) i=$((i+1)); continue ;;              # flags: --unshare-*, --share-net, --die-with-parent, --new-session, ...
+        *) break ;;
+    esac
+done
+cmd=("${args[@]:$i}")
+[ ${#cmd[@]} -gt 0 ] || { echo "bwrap: No command specified" >&2; exit 1; }
+for fd in "${info_fds[@]}"; do printf '{\n    "child-pid": %d\n}\n' $$ >&"$fd" 2>/dev/null; done
+[ -n "$chdir" ] && cd "$chdir"
+exec "${cmd[@]}"

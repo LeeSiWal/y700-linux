@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Steam
+Comment=Steam (x86-64 via FEX, SysV IPC compatibility, no user namespaces)
+Exec=FEXBash -c /home/siwal/y700-steam/y700-steam.sh
+Icon=/home/siwal/y700-steam/launcher/usr/share/icons/hicolor/256x256/apps/steam.png
+Categories=Game;
+X-Purism-FormFactor=Workstation;Mobile;
+Terminal=false

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Y700 디스플레이
+Name[en]=Y700 Display
+Comment=해상도, 화면 방향, 밝기
+Exec=/usr/bin/python3 /home/siwal/y700-design/desktop-service-20260919/ui/y700-display.py
+Icon=preferences-desktop-display-symbolic
+Categories=Settings;HardwareSettings;
+X-Purism-FormFactor=Workstation;Mobile;
+Terminal=false

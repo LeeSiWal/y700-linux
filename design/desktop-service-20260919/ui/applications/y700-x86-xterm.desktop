@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=x86 XTerm (FEX)
+Exec=FEXBash -c "xterm -fa Monospace -fs 11"
+Terminal=false
+Icon=foot

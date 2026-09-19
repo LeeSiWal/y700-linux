@@ -1,0 +1,9 @@
+# Y700: cnss/cld3 creates wlan0 (STA), wifi-aware0 and p2p0 on the same PCI function 0000:01:00.0.
+# With 99-default.link all three race for the path name "wlp1s0" (3a1d6dac: STA won; 8e18ad1f: wifi-aware0 won).
+# First matching .link wins; this one sets no Name/NamePolicy, so the kernel names are kept (STA is always wlan0).
+[Match]
+OriginalName=wlan0 wifi-aware0 p2p0
+Path=platform-1c00000.pcie-pci-0000:01:00.0
+
+[Link]
+Description=Y700 WLAN: keep kernel interface names

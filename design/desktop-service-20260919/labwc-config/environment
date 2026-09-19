@@ -1,0 +1,6 @@
+PATH=/home/siwal/y700-fex/root/usr/bin:/usr/local/bin:/usr/bin:/bin
+VK_DRIVER_FILES=/home/siwal/y700-gpu/turnip-kgsl-26.2.3-wsi/share/vulkan/icd.d/freedreno_icd.aarch64.json
+LD_LIBRARY_PATH=/home/siwal/y700-gpu/extra-libs/x/usr/lib/aarch64-linux-gnu
+MESA_VK_WSI_DEBUG=sw
+XDG_DATA_DIRS=/home/siwal/y700-design/desktop-service-20260919/ui:/usr/local/share:/usr/share
+LANG=C.UTF-8

@@ -20,14 +20,14 @@ FEX-Emu, Vulkan through turnip (KGSL), and **Steam with a native Linux game (Dea
 | Boot | Ubuntu userspace on the stock kernel; staged bring-up service loads reviewed module bundles after boot (`design/nextboot-impl`, `bringup.py`) |
 | Display | 1904x3040@120 dual-DSI panel driven from user space: DRM owner process + two-plane presenter; live render resolution 50–100 % with plane scaling |
 | Desktop | Phosh (phoc) or labwc on a headless wlroots output, shown on the panel by `desktop-service.py` (systemd), rotation, touch calibration (uinput proxy for phoc), brightness, settings app |
-| Input | Touch (NVT), keys; on-screen keyboard |
+| Input | Touch (NVT), keys; on-screen keyboard; USB/Bluetooth input hot-plug (the desktop service creates `/dev/input` nodes for external devices: `/dev` is a plain tmpfs here, not devtmpfs); Razer Kishi V3 Ultra verified in Dead Cells |
 | GPU | turnip (Mesa 26.2.3, KGSL backend, x11/wayland WSI) — native and x86 (FEX Vulkan thunk) vkcube on the panel |
 | Network | Wi-Fi (cnss/QCA), USB Ethernet; Bluetooth (custom HCI firmware loader + BlueZ) |
 | Audio | Speaker playback through a custom GPR/AudioReach client (no ALSA/PipeWire path yet) |
 | Sensors / power | ADC thermals, charger limiter, suspend (freezer / device pass) experiments |
 | x86 | FEX-Emu 2609 with an Ubuntu 24.04 x86 RootFS; X11/Wayland GUI apps |
 | **Steam** | client updates, logs in, library UI renders (software); native Linux games start through the `y700_direct` compatibility tool — see `steam-kit/` |
-| **Games** | Dead Cells (x86-64, OpenGL) renders on the Adreno 840: OpenGL -> zink (x86 Mesa) -> FEX Vulkan thunk -> turnip; GPU busy ~75 %. Input needs a gamepad/keyboard (not verified yet) |
+| **Games** | Dead Cells (x86-64, OpenGL) renders on the Adreno 840: OpenGL -> zink (x86 Mesa) -> FEX Vulkan thunk -> turnip; GPU busy ~75 %; playable with a USB gamepad (Kishi V3 Ultra). No game audio yet |
 
 ## Steam on a kernel without user namespaces and System V IPC (`steam-kit/`)
 The GKI kernel has `CONFIG_USER_NS`, `CONFIG_PID_NS`, `CONFIG_SYSVIPC` and `CONFIG_POSIX_MQUEUE` disabled. Valve's
@@ -55,8 +55,8 @@ outside by `steam-kit/y700-steam.sh`:
 7. `steam-kit/fex-config/`: FEX thunk configs (`thunks-vkwl.json` adds the WaylandClient thunk for Wayland Vulkan
    apps, `thunks-none.json` is used for the web helper).
 Known open issues: touch input in the Steam (X11/CEF) window; `steam://rungameid` requests are ignored (click Play);
-the hidden main window turns black under Phosh after it is closed; gamepads need Bluetooth or a USB hub plus device
-permissions (the session is not a logind session); Proton (Windows games) not done yet; high SoC temperature under load.
+the hidden main window turns black under Phosh after it is closed; one USB controller switches between the two USB-C ports (the
+first-connected port wins: unplug the LAN adapter to use a gamepad on the side port; Wi-Fi then carries the network); Proton (Windows games) not done yet; high SoC temperature under load.
 
 ## Layout
 - `design/nextboot-impl/` — bring-up orchestrator, bundle builder/loader, guards (bootguard, registry), DRM helpers

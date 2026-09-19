@@ -91,4 +91,16 @@ class Resolution(unittest.TestCase):
         self.assertEqual(ds.parse_ctl('resolution 33', 100, 4095, 270)[0], 'error')
         self.assertEqual(ds.parse_ctl('resolution 100x', 100, 4095, 270)[0], 'error')
 
+class InputDevs(unittest.TestCase):
+    def test_external_only(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as t:
+            def mk(ev, bus, dev, name):
+                d = Path(t)/ev/'device'/'id'; d.mkdir(parents=True)
+                (d/'bustype').write_text(bus + '\n'); (Path(t)/ev/'dev').write_text(dev + '\n'); (Path(t)/ev/'device'/'name').write_text(name + '\n')
+            mk('event0', '0019', '13:64', 'gpio-keys'); mk('event3', '0006', '13:67', 'y700-rotated-touch')
+            mk('event4', '0003', '13:68', 'Razer Kishi'); mk('event9', '0005', '13:73', 'BT pad')
+            got = ds.external_input_devices(t)
+            self.assertEqual(sorted(got), ['event4', 'event9']); self.assertEqual(got['event4'], (13, 68, 'Razer Kishi'))
+
 if __name__ == '__main__': unittest.main(verbosity=1)

@@ -283,6 +283,45 @@ def fix_run_ownership():
             if st.st_uid != dr.UID: os.lchown(q, dr.UID, dr.GID); fixed.append(q)
     if fixed: log('RUN ownership fixed', fixed[:10], len(fixed))
 
+EXTERNAL_BUSES = {0x0003, 0x0005}                              # BUS_USB, BUS_BLUETOOTH: gamepads, keyboards, mice
+
+def external_input_devices(sysroot='/sys/class/input'):
+    """{eventN: (major, minor, name)} for input devices on USB/Bluetooth (the internal gpio-keys/touch/pen and our
+    uinput touch proxy are virtual or on the SoC bus and are left to the seat shim)."""
+    out = {}
+    for d in sorted(Path(sysroot).glob('event*')):
+        try:
+            bus = int((d/'device/id/bustype').read_text(), 16)
+            if bus not in EXTERNAL_BUSES: continue
+            ma, mi = map(int, (d/'dev').read_text().split(':')); out[d.name] = (ma, mi, (d/'device/name').read_text().strip())
+        except (OSError, ValueError): continue
+    return out
+
+class InputNodes:
+    """/dev is a plain tmpfs here (no devtmpfs): nobody creates nodes for hot-plugged devices. Create /dev/input/eventN
+    for external USB/BT input devices (Kishi, keyboards, pads) owned by the session user (0600); remove them on unplug."""
+    def __init__(self): self.made = {}
+    def sync(self):
+        cur = external_input_devices()
+        for ev, (ma, mi, name) in cur.items():
+            node = Path('/dev/input')/ev
+            if self.made.get(ev) == (ma, mi): continue
+            try:
+                if node.exists():
+                    st = os.stat(node)
+                    if not (stat.S_ISCHR(st.st_mode) and st.st_rdev == os.makedev(ma, mi)): log('INPUT node mismatch, left alone', node); continue
+                else:
+                    os.mknod(node, 0o600 | stat.S_IFCHR, os.makedev(ma, mi))
+                os.chown(node, dr.UID, dr.GID); os.chmod(node, 0o600); self.made[ev] = (ma, mi); log('INPUT node', node, repr(name))
+            except OSError as e: log('INPUT node error', node, repr(e))
+        for ev in [e for e in self.made if e not in cur]:
+            try: (Path('/dev/input')/ev).unlink(missing_ok=True)
+            except OSError: pass
+            log('INPUT node removed', ev); del self.made[ev]
+    def close(self):
+        for ev in list(self.made): (Path('/dev/input')/ev).unlink(missing_ok=True)
+        self.made.clear()
+
 STOP = []
 def _on_signal(sig, _frm): STOP.append(sig)
 
@@ -356,11 +395,21 @@ def main():
         log('SHELL', shell)
         lab = subprocess.Popen(['runuser', '-u', 'siwal', '--', 'env'] + ['%s=%s' % kv for kv in env.items()] + cmd,
                                stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True)
+        # the seat shim answers the compositor from its own thread: the main thread blocks in Wayland round trips
+        # while the compositor may be waiting for an OPEN_DEVICE answer (deadlock seen 2026-09-20 00:36 with the
+        # hot-plugged Kishi devices opened after the socket existed)
+        import threading
+        shim_stop = threading.Event()
+        def shim_loop():
+            while not shim_stop.is_set():
+                try: shim.poll(0.2)
+                except Exception as e: log('SEAT thread error', repr(e)); time.sleep(0.5)
+        shim_thread = threading.Thread(target=shim_loop, name='seat-shim', daemon=True); shim_thread.start()
         t0 = time.monotonic(); socks = []
         while time.monotonic() - t0 < 15 and not socks and not STOP:
-            shim.poll(0.1); socks = [f for f in os.listdir(RUN) if f.startswith('wayland-') and not f.endswith('.lock')]
+            time.sleep(0.1); socks = [f for f in os.listdir(RUN) if f.startswith('wayland-') and not f.endswith('.lock')]
         if not socks: raise RuntimeError('compositor socket did not appear')
-        for _ in range(10): shim.poll(0.1)
+        time.sleep(1.0)
         os.environ['XDG_RUNTIME_DIR'] = str(RUN); os.environ['WAYLAND_DISPLAY'] = socks[0]
         conn = wl.Conn(); reg_id, globs = wl.registry(conn)
         outs = wlcapture.Outputs(conn, reg_id, globs)
@@ -368,7 +417,7 @@ def main():
         log('LABWC', socks[0], 'mode', mode, 'rotation', rot, 'resolution', pct0, '%dx%d' % (rw0, rh0))
         # labwc: the libinput touch calibration from rc.xml only takes effect after a reconfigure (panel 2026-09-19: fresh
         # start -> touch unrotated, SIGHUP -> correct); reconfigure once the input devices are up
-        for _ in range(10): shim.poll(0.1)
+        time.sleep(1.0)
         if shell == 'labwc':
             lp = labwc_pid(lab.pid)
             if lp: os.kill(lp, signal.SIGHUP); log('LABWC reconfigure (touch calibration) pid', lp)
@@ -415,11 +464,12 @@ def main():
                     if lp: os.kill(lp, signal.SIGHUP)                 # labwc re-reads rc.xml: touch matrix follows
                 follow_rotation(arg); log('CTL rotate ->', arg, 'labwc', lp); return 'ok %d' % arg
             return '%s %s' % (act, arg)
-        ctl = Control()
+        ctl = Control(); inodes = InputNodes(); inodes.sync(); t_in = time.monotonic()
         back = 0; n = n0 = 0; copy_ms = 0.0; u_base = rg.underruns(c, reg['encoder_status']); t_stat = time.monotonic()
         while not STOP:
             if lab.poll() is not None: raise RuntimeError('compositor exited rc=%s' % lab.returncode)
-            shim.poll(0); ctl.poll(on_ctl)
+            ctl.poll(on_ctl)
+            if time.monotonic() - t_in >= 1.0: inodes.sync(); t_in = time.monotonic()
             deg = T2DEG.get(head.get('transform'))
             if deg is not None and deg != state['rot']: follow_rotation(deg); log('ROTATION by the shell ->', deg)
             try: buf, info = cap.capture(damage=not S['first'], timeout=0.25)
@@ -467,7 +517,10 @@ def main():
                     except ProcessLookupError: break
                 else: continue
                 break
-        if shim: shim.close()
+        if shim:
+            try: shim_stop.set(); shim_thread.join(2)
+            except NameError: pass
+            shim.close()
         if ctl: ctl.close()
         if tproxy: tproxy.close(); log('TOUCH proxy closed after', tproxy.frames, 'frames')
         restored = False

@@ -65,7 +65,7 @@ def main():
     reg, reg_sha = rg.load(c, m['boot_id']); greg, _ = rg.load(c, m['boot_id'], 'gpu')
     rg.process_ok(c, reg['owner']); rg.process_ok(c, greg['keeper'])
     bt_reg = AGENT/('registry-bt-%s.json' % m['boot_id'][:8]); need(not bt_reg.exists(), 'BT registry already exists')
-    need(c.read(Path('/sys/class/net')/b['net']/'carrier').strip() == '1', 'USB Ethernet link down')
+    need(b['net'] is None or c.read(Path('/sys/class/net')/b['net']/'carrier').strip() == '1', 'management link down')
     print('PREFLIGHT PASS: bt-a/bt-b live, no hci, nodes free, firmware hashes, owner+gpu keeper alive.', flush=True)
     if sys.argv[1] == '--check': return
     need(os.geteuid() == 0, 'interactive sudo required')
@@ -74,8 +74,8 @@ def main():
     wlan0 = wlan()
     def extra():
         rg.display_ok(c, reg, state); rg.process_ok(c, greg['keeper'])
-        n = Path('/sys/class/net')/b['net']
-        need(c.read(n/'carrier').strip() == '1' and c.read(n/'operstate').strip() == 'up', 'USB Ethernet link changed')
+        n = b['net'] and Path('/sys/class/net')/b['net']
+        need(not n or c.read(n/'carrier').strip() == '1' and c.read(n/'operstate').strip() == 'up', 'management link changed')
         need(wlan() == wlan0, 'Wi-Fi interface state changed')
     with (B/'apply.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

@@ -1,5 +1,5 @@
 [Unit]
-Description=Y700 staged hardware bring-up (reviewed one-shot bundles: display .. Wi-Fi .. Bluetooth)
+Description=Y700 staged hardware bring-up (reviewed one-shot bundles: display .. Wi-Fi .. Bluetooth .. audio)
 Documentation=file:/home/siwal/y700-design/bootfix-20260919/README.md
 After=network.target NetworkManager.service systemd-udev-settle.service
 ConditionPathExists=!/home/siwal/y700-agent/bringup.disable
@@ -9,7 +9,7 @@ RefuseManualStop=yes
 [Service]
 Type=exec
 RemainAfterExit=yes
-ExecStart=/usr/bin/python3 -B /home/siwal/y700-design/nextboot-impl/bringup.py --upto btkeeper --wifi
+ExecStart=/usr/bin/python3 -B /home/siwal/y700-design/nextboot-impl/bringup.py --upto audio-c --wifi
 TimeoutStartSec=infinity
 StandardOutput=journal
 StandardError=journal

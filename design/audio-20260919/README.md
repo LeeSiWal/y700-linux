@@ -223,3 +223,13 @@
 - audiod4.run은 이제 임의 PCM 클립(`pcm=`)을 받는다. 기본 SD 라인 = SD1
 - D-5 결과: **STAGE_AUDIO_D5_LOADED**. L 83/3.49 s, R 71/2.99 s, W 94/3.99 s 버퍼, 앰프 start success 6번, fault 0건. 사용자: **"다 잘 들렸어"** → 왼쪽/오른쪽 채널 모두 출력, **WAV 재생 동작(물리 확인)**
   - 채널 ↔ 물리적 좌/우 스피커 대응은 사용자가 따로 확인하지 않았다(미확정)
+
+## 게임 소리 (2026-09-20, boot 684daae1) — 물리 동작 확인: Dead Cells 소리 + Kishi 패드
+- 경로: 게임(x86, FEX) → x86 libpulse → session `pipewire-pulse` → sink "Y700 Speakers"(`desktop-service-20260919/audio/y700-speaker.conf`,
+  별도 `pipewire -c` 클라이언트의 pipe-tunnel sink) → `/run/y700-desktop/y700-speaker.fifo`(s16le/2ch/48k) → `nextboot-impl/speakerd.py`(root)
+  → D-5와 같은 그래프(SD1, 32bit 슬롯) → 스피커
+- speakerd: 데이터가 오면 그래프를 연다(8–9 ms), 2초 무데이터/30초 무음이면 닫는다. 버퍼 4 KiB × 4(≈85 ms), FIFO 백로그 > 32 KiB면 오래된 쪽을 버린다.
+  고정 감쇠 0.5(−6 dB; Awinic 보호 알고리즘이 없다). FIFO는 siwal 소유 FIFO인지 확인하고 O_NOFOLLOW로 연다. `--test` host 테스트
+- WirePlumber: `audio/50-y700-no-alsa.conf`(~/.config/wireplumber/wireplumber.conf.d/) — canoe 카드의 BE PCM을 열지 않는다
+- 결과: 248초 재생 11646 버퍼, DSP 오류 0, short read 6. host 테스트: x86 libpulse(FEX) 2초 톤 → FIFO에 2.01초, 피크 그대로
+- 부팅 자동화(재부팅 검증 전): `y700-bringup.service` `--upto audio-c --wifi`, `y700-speakerd.service`(오디오 단계를 스스로 기다린다)

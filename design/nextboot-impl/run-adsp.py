@@ -51,7 +51,7 @@ def main():
     reg, reg_sha = rg.load(c, m['boot_id']); greg, _ = rg.load(c, m['boot_id'], 'gpu'); breg, _ = rg.load(c, m['boot_id'], 'bt')
     for p in (reg['owner'], greg['keeper'], breg['keeper']): rg.process_ok(c, p)
     pdm_reg = AGENT/('registry-pdm-%s.json' % m['boot_id'][:8]); need(not pdm_reg.exists(), 'pdmapper registry already exists')
-    need(c.read(Path('/sys/class/net')/a['net']/'carrier').strip() == '1', 'USB Ethernet link down')
+    need(a['net'] is None or c.read(Path('/sys/class/net')/a['net']/'carrier').strip() == '1', 'management link down')
     print('PREFLIGHT PASS: ADSP offline, firmware %s, no locator, owner/gpu/bt keepers alive.' % json.dumps(sorted(set(fs.values()))), flush=True)
     if sys.argv[1] == '--check': return
     need(os.geteuid() == 0, 'interactive sudo required')
@@ -61,8 +61,8 @@ def main():
     children = []
     def extra():
         rg.display_ok(c, reg, state); rg.process_ok(c, greg['keeper']); rg.process_ok(c, breg['keeper'])
-        n = Path('/sys/class/net')/a['net']
-        need(c.read(n/'carrier').strip() == '1' and c.read(n/'operstate').strip() == 'up', 'USB Ethernet link changed')
+        n = a['net'] and Path('/sys/class/net')/a['net']
+        need(not n or c.read(n/'carrier').strip() == '1' and c.read(n/'operstate').strip() == 'up', 'management link changed')
         need(wlan() == wlan0, 'Wi-Fi interface state changed')
         for ch, ident, what in children: proc_ok(ch, ident, what)
     with (B/'apply.lock').open('a') as lock:

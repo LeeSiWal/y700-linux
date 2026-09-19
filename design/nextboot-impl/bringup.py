@@ -6,7 +6,7 @@ reviewed success status. It never retries an attempted bundle, never deletes gua
   success stops the run (a human must review it). An unattempted bundle of this boot is reused only if its --check passes.
 - Kill switch: /home/siwal/y700-agent/bringup.disable (exists -> exit 0 without doing anything).
 - Log: /home/siwal/y700-agent/bringup-<boot8>.log and status JSON bringup-<boot8>.json (one per boot, appended).
-Usage: sudo python3 -B bringup.py [--upto STAGE] [--wifi] [--dry-run]   (stages up to btkeeper)"""
+Usage: sudo python3 -B bringup.py [--upto STAGE] [--wifi] [--dry-run]   (stages up to btkeeper; audio: --upto audio-c)"""
 import json, os, subprocess, sys, time
 from pathlib import Path
 
@@ -31,7 +31,13 @@ STAGES = [('pstore', 'load-stage.py', {'STAGE_PSTORE_LOADED'}),
           # same reviewed bundles as the manual runbook of boot 8e18ad1f (STAGE_BT_A_LOADED, STAGE_BT_B_LOADED, BT_KEEPER_READY)
           ('bt-a', 'load-stage.py', {'STAGE_BT_A_LOADED'}),
           ('bt-b', 'load-stage.py', {'STAGE_BT_B_LOADED'}),
-          ('btkeeper', 'run-btkeeper.py', {'BT_KEEPER_READY'})]
+          ('btkeeper', 'run-btkeeper.py', {'BT_KEEPER_READY'}),
+          # Audio (speaker): the stage chain of boot 8e18ad1f (qrtr-smd -> adsp -> audio-c1 -> audio-c, all reviewed successes);
+          # only with an explicit --upto audio-c (the boot service stops at btkeeper)
+          ('qrtr-smd', 'load-stage.py', {'STAGE_QRTR_SMD_LOADED'}),
+          ('adsp', 'run-adsp.py', {'ADSP_RUNNING_OBSERVED'}),
+          ('audio-c1', 'load-stage.py', {'STAGE_AUDIO_C1_LOADED'}),
+          ('audio-c', 'load-stage.py', {'STAGE_AUDIO_C_LOADED'})]
 
 def boot_id(): return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
 

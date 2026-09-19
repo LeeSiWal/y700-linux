@@ -15,5 +15,8 @@ env | grep -E '^(VK_|FEX_|LD_|MESA|LIBGL|GALLIUM|DISPLAY|WAYLAND|XDG_RUNTIME|STE
 export VK_DRIVER_FILES=/home/siwal/y700-gpu/turnip-kgsl-26.2.3-wsi/share/vulkan/icd.d/freedreno_icd.aarch64.json
 export MESA_VK_WSI_DEBUG=sw
 unset FEX_THUNKCONFIG VK_ICD_FILENAMES
+# gamepad hot-plug: /dev/input nodes of USB/BT pads are made by the desktop service (no devtmpfs, udev does not know them),
+# so SDL must watch /dev/input with inotify instead of waiting for udev events
+export SDL_JOYSTICK_DISABLE_UDEV=1
 if [ "${Y700_GL:-zink}" = zink ]; then export LIBGL_KOPPER_DRI2=1 MESA_LOADER_DRIVER_OVERRIDE=zink; fi
 exec "$@" >> "$L" 2>&1

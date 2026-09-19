@@ -297,29 +297,45 @@ def external_input_devices(sysroot='/sys/class/input'):
         except (OSError, ValueError): continue
     return out
 
+def external_hidraw_devices(sysroot='/sys/class/hidraw'):
+    """{hidrawN: (major, minor, name)} for HID devices on USB/Bluetooth. Steam (Big Picture, Steam Input) reads
+    controllers through hidraw, games mostly through evdev."""
+    out = {}
+    for d in sorted(Path(sysroot).glob('hidraw*')):
+        try:
+            ue = dict(l.split('=', 1) for l in (d/'device/uevent').read_text().splitlines() if '=' in l)
+            if int(ue.get('HID_ID', '0:0:0').split(':')[0], 16) not in EXTERNAL_BUSES: continue
+            ma, mi = map(int, (d/'dev').read_text().split(':')); out[d.name] = (ma, mi, ue.get('HID_NAME', '?'))
+        except (OSError, ValueError): continue
+    return out
+
 class InputNodes:
     """/dev is a plain tmpfs here (no devtmpfs): nobody creates nodes for hot-plugged devices. Create /dev/input/eventN
-    for external USB/BT input devices (Kishi, keyboards, pads) owned by the session user (0600); remove them on unplug."""
-    def __init__(self): self.made = {}
-    def sync(self):
-        cur = external_input_devices()
-        for ev, (ma, mi, name) in cur.items():
-            node = Path('/dev/input')/ev
-            if self.made.get(ev) == (ma, mi): continue
+    and /dev/hidrawN for external USB/BT input devices (Kishi, keyboards, pads) owned by the session user (0600);
+    remove them on unplug."""
+    def __init__(self, dev='/dev'): self.made = {}; self.dev = Path(dev)
+    def scan(self):
+        cur = {self.dev/'input'/k: v for k, v in external_input_devices().items()}
+        cur.update({self.dev/k: v for k, v in external_hidraw_devices().items()})
+        return cur
+    def sync(self, cur=None):
+        cur = self.scan() if cur is None else cur
+        for node, (ma, mi, name) in cur.items():
+            if self.made.get(node) == (ma, mi): continue
             try:
                 if node.exists():
                     st = os.stat(node)
                     if not (stat.S_ISCHR(st.st_mode) and st.st_rdev == os.makedev(ma, mi)): log('INPUT node mismatch, left alone', node); continue
                 else:
                     os.mknod(node, 0o600 | stat.S_IFCHR, os.makedev(ma, mi))
-                os.chown(node, dr.UID, dr.GID); os.chmod(node, 0o600); self.made[ev] = (ma, mi); log('INPUT node', node, repr(name))
+                os.chown(node, dr.UID, dr.GID); os.chmod(node, 0o600); self.made[node] = (ma, mi); log('INPUT node', node, repr(name))
             except OSError as e: log('INPUT node error', node, repr(e))
-        for ev in [e for e in self.made if e not in cur]:
-            try: (Path('/dev/input')/ev).unlink(missing_ok=True)
+        for node in [n for n in self.made if n not in cur]:
+            try: node.unlink(missing_ok=True)
             except OSError: pass
-            log('INPUT node removed', ev); del self.made[ev]
+            log('INPUT node removed', node); del self.made[node]
     def close(self):
-        for ev in list(self.made): (Path('/dev/input')/ev).unlink(missing_ok=True)
+        for node in list(self.made): node.unlink(missing_ok=True)
         self.made.clear()
 
 STOP = []
@@ -347,7 +363,10 @@ def main():
     fix_run_ownership()
     dm_seen = set(c.dmesg().splitlines())
     fd = bo.borrow_fd(c, reg); allfbs = []; lab = None; shim = None; ctl = None; tproxy = None; rc = 0; errs = []
-    rec = {'boot_id': boot, 'owner': {'pid': reg['owner']['pid'], 'starttime': reg['owner']['starttime']}, 'fbs': [], 'handles': [], 'started': time.time()}
+    # presenter identity: registry.desktop_ok (bring-up stages running while the desktop is up) accepts the display state
+    # only while this very process is alive and every desktop plane shows one of the fbs listed here
+    rec = {'boot_id': boot, 'owner': {'pid': reg['owner']['pid'], 'starttime': reg['owner']['starttime']}, 'fbs': [], 'handles': [], 'started': time.time(),
+           'presenter': {'pid': os.getpid(), 'starttime': c.task_stat(c.read('/proc/self/stat'))['starttime']}}
     def alloc(rw, rh):
         """two rw x rh XR24 framebuffers, recorded in fbs.json before they can reach the screen"""
         out = []

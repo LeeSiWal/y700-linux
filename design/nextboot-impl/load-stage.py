@@ -47,7 +47,7 @@ def preflight(m, mon):
         for rel, digest in w['firmware'].items():
             p = Path('/lib/firmware')/rel
             need(p.is_file() and not p.is_symlink() and hashlib.sha256(c.read(p, True)).hexdigest() == digest, 'Wi-Fi firmware missing/changed: ' + rel)
-        need(c.read(Path('/sys/class/net')/w['net']/'carrier').strip() == '1', 'USB Ethernet link down')
+        need(w['net'] is None or c.read(Path('/sys/class/net')/w['net']/'carrier').strip() == '1', 'management link down')
         for sup in w['guard_suppliers']:
             others = [x for x in unbound_consumers(sup) if 'cnss' not in x and 'pcie' not in x]
             need(others, 'only Wi-Fi/PCIe consumers left unbound for %s: binding could trigger its sync_state; review first' % sup)
@@ -72,13 +72,13 @@ def preflight(m, mon):
         need(not list(Path('/sys/bus/iio/devices').iterdir()), 'IIO devices already present')
         have = {c.read(z/'type').strip() for z in Path('/sys/class/thermal').glob('thermal_zone*')}
         need(not have & set(ad['zones']), 'ADC thermal zones already registered: %r' % sorted(have & set(ad['zones'])))
-        need(c.read(Path('/sys/class/net')/ad['net']/'carrier').strip() == '1', 'USB Ethernet link down')
+        need(ad['net'] is None or c.read(Path('/sys/class/net')/ad['net']/'carrier').strip() == '1', 'management link down')
     if m['stage'] == 'frpc':
         fr = m['frpc']; rp = Path('/sys/bus/rpmsg/devices')/fr['rpmsg']
         need(c.read(Path('/sys/class/remoteproc')/fr['rproc']/'state').strip() == 'running', 'ADSP not running')
         need(rp.exists() and not (rp/'driver').exists(), 'fastrpc rpmsg channel missing or already bound')
         need(not list(Path('/sys/class/misc').glob('fastrpc*')), 'fastrpc device already exists')
-        need(c.read(Path('/sys/class/net')/fr['net']/'carrier').strip() == '1', 'USB Ethernet link down')
+        need(fr['net'] is None or c.read(Path('/sys/class/net')/fr['net']/'carrier').strip() == '1', 'management link down')
     if m['stage'] in ('audio-d1', 'audio-d2', 'audio-d3', 'audio-d4', 'audio-d5'):
         au = m['audio']; import registry as rg1
         need(c.read(Path('/sys/class/remoteproc')/au['rproc']/'state').strip() == 'running', 'ADSP not running')
@@ -90,7 +90,7 @@ def preflight(m, mon):
         if m['stage'] == 'audio-d2':
             need(Path('/sys/class/msm_audio_ion/msm_audio_ion/dev').exists() and Path('/sys/class/dma_heap/system/dev').exists(), 'ion/dma-heap device missing')
         need('canoeqrdsndcard' in c.read('/proc/asound/cards'), 'sound card missing')
-        need(c.read(Path('/sys/class/net')/au['net']/'carrier').strip() == '1', 'USB Ethernet link down')
+        need(au['net'] is None or c.read(Path('/sys/class/net')/au['net']/'carrier').strip() == '1', 'management link down')
     if m['stage'] == 'audio-c4':
         au = m['audio']; import registry as rg1; P = Path('/sys/bus/platform/devices')
         need(c.read(Path('/sys/class/remoteproc')/au['rproc']/'state').strip() == 'running', 'ADSP not running')
@@ -98,7 +98,7 @@ def preflight(m, mon):
         need((P/au['extdisp_codec']/'driver').is_symlink() and not (P/au['sound']/'driver').exists() and not (P/au['btswr']/'driver').exists(), 'C-3 state changed')
         need(Path('/sys/class/bluetooth/hci0').exists(), 'hci0 missing')
         need(not Path('/proc/asound/cards').exists() or 'no soundcards' in c.read('/proc/asound/cards'), 'a sound card already exists')
-        need(c.read(Path('/sys/class/net')/au['net']/'carrier').strip() == '1', 'USB Ethernet link down')
+        need(au['net'] is None or c.read(Path('/sys/class/net')/au['net']/'carrier').strip() == '1', 'management link down')
     if m['stage'] == 'audio-c3':
         au = m['audio']; import registry as rg1; P = Path('/sys/bus/platform/devices')
         need(c.read(Path('/sys/class/remoteproc')/au['rproc']/'state').strip() == 'running', 'ADSP not running')
@@ -106,7 +106,7 @@ def preflight(m, mon):
         need(not (P/au['sound']/'driver').exists() and not (P/au['extdisp_codec']/'driver').exists(), 'card or ext-disp codec already bound')
         for a in au['amps']: need((Path('/sys/bus/i2c/devices')/a/'driver').is_symlink(), 'amp not bound (C-2 state changed): ' + a)
         need(not Path('/proc/asound/cards').exists() or 'no soundcards' in c.read('/proc/asound/cards'), 'a sound card already exists')
-        need(c.read(Path('/sys/class/net')/au['net']/'carrier').strip() == '1', 'USB Ethernet link down')
+        need(au['net'] is None or c.read(Path('/sys/class/net')/au['net']/'carrier').strip() == '1', 'management link down')
     if m['stage'] in ('audio-c2', 'audio-c'):
         au = m['audio']; import registry as rg1; P = Path('/sys/bus/platform/devices')
         need(c.read(Path('/sys/class/remoteproc')/au['rproc']/'state').strip() == 'running', 'ADSP not running')
@@ -116,41 +116,41 @@ def preflight(m, mon):
         for n, h in au['firmware_install'].items():
             fp = Path('/lib/firmware')/n; need(not fp.exists() or hashlib.sha256(c.read(fp, True)).hexdigest() == h, 'different firmware installed: ' + n)
         need(not Path('/proc/asound/cards').exists() or 'no soundcards' in c.read('/proc/asound/cards'), 'a sound card already exists')
-        need(c.read(Path('/sys/class/net')/au['net']/'carrier').strip() == '1', 'USB Ethernet link down')
+        need(au['net'] is None or c.read(Path('/sys/class/net')/au['net']/'carrier').strip() == '1', 'management link down')
     if m['stage'] == 'audio-c1':
         au = m['audio']; import registry as rg1
         need(c.read(Path('/sys/class/remoteproc')/au['rproc']/'state').strip() == 'running', 'ADSP not running')
         preg, _ = rg1.load(c, m['boot_id'], 'pdm'); rg1.process_ok(c, preg['pdmapper'])
         gp = Path('/sys/bus/rpmsg/devices')/au['gpr_rpmsg']; need(gp.exists() and not (gp/'driver').exists(), 'adsp_apps channel missing or already bound')
         need(not Path('/proc/asound/cards').exists() or 'no soundcards' in c.read('/proc/asound/cards'), 'a sound card already exists')
-        need(c.read(Path('/sys/class/net')/au['net']/'carrier').strip() == '1', 'USB Ethernet link down')
+        need(au['net'] is None or c.read(Path('/sys/class/net')/au['net']/'carrier').strip() == '1', 'management link down')
     if m['stage'] == 'qrtr-smd':
         q = m['qrtr']; rp = Path('/sys/bus/rpmsg/devices')/q['soccp_rpmsg']
         need(rp.exists() and not (rp/'driver').exists(), 'SoCCP IPCRTR channel missing or already bound')
         need(sorted(p.name for p in Path('/sys/bus/rpmsg/devices').iterdir() if p.name.endswith('.IPCRTR.-1.-1')) == [q['soccp_rpmsg']], 'unexpected IPCRTR channel set')
         need(c.read(Path('/sys/class/remoteproc')/q['soccp_rproc']/'state').strip() == 'attached', 'SoCCP not attached')
-        need(c.read(Path('/sys/class/net')/q['net']/'carrier').strip() == '1', 'USB Ethernet link down')
+        need(q['net'] is None or c.read(Path('/sys/class/net')/q['net']/'carrier').strip() == '1', 'management link down')
     if m['stage'] == 'blescan':
         import registry as rg0
         breg, _ = rg0.load(c, m['boot_id'], 'bt'); rg0.process_ok(c, breg['keeper'])
         need(breg['hci'] == m['bt']['hci'] and sorted(p.name for p in Path('/sys/class/bluetooth').iterdir()) == [m['bt']['hci']], 'hci set changed')
-        need(c.read(Path('/sys/class/net')/m['bt']['net']/'carrier').strip() == '1', 'USB Ethernet link down')
+        need(m['bt']['net'] is None or c.read(Path('/sys/class/net')/m['bt']['net']/'carrier').strip() == '1', 'management link down')
     if m['stage'] == 'bt-b':
         P = Path('/sys/bus/platform/devices')
         need((P/m['bt']['uart']/'driver').resolve().name == 'msm_geni_serial' and (P/m['bt']['power']/'driver').resolve().name == 'bt_power', 'bt-a incomplete')
         need(not Path('/sys/class/bluetooth').exists(), '/sys/class/bluetooth already exists')
-        need(c.read(Path('/sys/class/net')/m['bt']['net']/'carrier').strip() == '1', 'USB Ethernet link down')
+        need(m['bt']['net'] is None or c.read(Path('/sys/class/net')/m['bt']['net']/'carrier').strip() == '1', 'management link down')
     if m['stage'] == 'bt-probe':
         P = Path('/sys/bus/platform/devices')
         need((P/m['bt']['uart']/'driver').resolve().name == 'msm_geni_serial' and (P/m['bt']['power']/'driver').resolve().name == 'bt_power', 'bt-a incomplete')
         need(Path('/sys/class/tty/ttyHS0/dev').exists() and Path('/sys/class/bt-dev/btpower/dev').exists(), 'ttyHS0/btpower missing')
         need(not list(Path('/sys/class').glob('bluetooth/hci*')), 'an HCI device already exists')
-        need(c.read(Path('/sys/class/net')/m['bt']['net']/'carrier').strip() == '1', 'USB Ethernet link down')
+        need(m['bt']['net'] is None or c.read(Path('/sys/class/net')/m['bt']['net']/'carrier').strip() == '1', 'management link down')
     if m['stage'] == 'bt-a':
         b = m['bt']; P = Path('/sys/bus/platform/devices')
         for dev in (b['uart'], b['power']): need(not (P/dev/'driver').exists(), dev + ' already bound')
         need(not list(Path('/sys/class/tty').glob('ttyHS*')), 'ttyHS already exists')
-        need(c.read(Path('/sys/class/net')/b['net']/'carrier').strip() == '1', 'USB Ethernet link down')
+        need(b['net'] is None or c.read(Path('/sys/class/net')/b['net']/'carrier').strip() == '1', 'management link down')
         cv = P/b['clk_virt']
         cons = sorted(l.name.split(':', 1)[1].split(':', 1)[1] for l in cv.glob('consumer:*'))
         need(cons == sorted(b['clk_virt_others'] + [b['uart']]), 'clk_virt consumer set changed: %r' % cons)
@@ -232,8 +232,9 @@ def main():
                     need(c.read(Path('/sys/class/remoteproc')/m['audio']['rproc']/'state').strip() == 'running', 'ADSP left running state')
                     for kind, key in (('pdm', 'pdmapper'), ('bt', 'keeper')): rg.process_ok(c, rg.load(c, m['boot_id'], kind)[0][key])
                 if 'wifi' in m or 'bt' in m or 'qrtr' in m or 'audio' in m or 'frpc' in m or 'adc' in m:
-                    n = Path('/sys/class/net')/(m.get('wifi') or m.get('bt') or m.get('qrtr') or m.get('audio') or m.get('frpc') or m.get('adc'))['net']
-                    need(c.read(n/'carrier').strip() == '1' and c.read(n/'operstate').strip() == 'up', 'USB Ethernet link changed')
+                    net = (m.get('wifi') or m.get('bt') or m.get('qrtr') or m.get('audio') or m.get('frpc') or m.get('adc'))['net']
+                    n = net and Path('/sys/class/net')/net
+                    need(not n or c.read(n/'carrier').strip() == '1' and c.read(n/'operstate').strip() == 'up', 'management link changed')
             display_extra(); mon.extra = display_extra; drm_before = None   # exact native state is checked every tick instead
         print('Observing baseline for 15 seconds.', flush=True); mon.observe(15, quiet=True)
         report = {'boot_id': m['boot_id'], 'stage': m['stage'], 'loads': [], 'dmesg_before': c.dmesg(), 'clocks_before': c.clocks(),

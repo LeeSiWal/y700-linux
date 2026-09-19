@@ -1,0 +1,17 @@
+[Unit]
+Description=Y700 speaker daemon (session PipeWire pipe sink -> ADSP speaker graph)
+Documentation=file:/home/siwal/y700-design/audio-20260919/README.md
+# waits by itself until bring-up has loaded the audio stages (ADSP running, canoe card registered)
+After=y700-bringup.service
+ConditionPathExists=!/home/siwal/y700-agent/speakerd.disable
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 -B /home/siwal/y700-design/nextboot-impl/speakerd.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

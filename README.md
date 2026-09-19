@@ -23,11 +23,11 @@ FEX-Emu, Vulkan through turnip (KGSL), and **Steam with a native Linux game (Dea
 | Input | Touch (NVT), keys; on-screen keyboard; USB/Bluetooth input hot-plug (the desktop service creates `/dev/input` nodes for external devices: `/dev` is a plain tmpfs here, not devtmpfs); Razer Kishi V3 Ultra verified in Dead Cells |
 | GPU | turnip (Mesa 26.2.3, KGSL backend, x11/wayland WSI) — native and x86 (FEX Vulkan thunk) vkcube on the panel |
 | Network | Wi-Fi (cnss/QCA), USB Ethernet; Bluetooth (custom HCI firmware loader + BlueZ) |
-| Audio | Speaker playback through a custom GPR/AudioReach client (no ALSA/PipeWire path yet) |
+| Audio | Speakers through a custom GPR/AudioReach client (`speakerd.py`) fed by a PipeWire pipe sink; apps and x86 games use PulseAudio/PipeWire as usual. No speaker protection algorithm (fixed −6 dB), no headset/mic yet |
 | Sensors / power | ADC thermals, charger limiter, suspend (freezer / device pass) experiments |
 | x86 | FEX-Emu 2609 with an Ubuntu 24.04 x86 RootFS; X11/Wayland GUI apps |
 | **Steam** | client updates, logs in, library UI renders (software); native Linux games start through the `y700_direct` compatibility tool — see `steam-kit/` |
-| **Games** | Dead Cells (x86-64, OpenGL) renders on the Adreno 840: OpenGL -> zink (x86 Mesa) -> FEX Vulkan thunk -> turnip; GPU busy ~75 %; playable with a USB gamepad (Kishi V3 Ultra). No game audio yet |
+| **Games** | Dead Cells (x86-64, OpenGL) renders on the Adreno 840: OpenGL -> zink (x86 Mesa) -> FEX Vulkan thunk -> turnip; GPU busy ~75 %; playable with a USB gamepad (Kishi V3 Ultra) **with sound** |
 
 ## Steam on a kernel without user namespaces and System V IPC (`steam-kit/`)
 The GKI kernel has `CONFIG_USER_NS`, `CONFIG_PID_NS`, `CONFIG_SYSVIPC` and `CONFIG_POSIX_MQUEUE` disabled. Valve's
@@ -57,6 +57,25 @@ outside by `steam-kit/y700-steam.sh`:
 Known open issues: touch input in the Steam (X11/CEF) window; `steam://rungameid` requests are ignored (click Play);
 the hidden main window turns black under Phosh after it is closed; one USB controller switches between the two USB-C ports (the
 first-connected port wins: unplug the LAN adapter to use a gamepad on the side port; Wi-Fi then carries the network); Proton (Windows games) not done yet; high SoC temperature under load.
+
+## Game audio (`design/nextboot-impl/speakerd.py`, `design/desktop-service-20260919/audio/`)
+The vendor sound card only exposes AudioReach backends; playback needs a DSP graph built from user space. The session
+runs PipeWire + WirePlumber (ALSA monitor disabled: `50-y700-no-alsa.conf`) + `pipewire-pulse`, plus a small
+`pipewire -c y700-speaker.conf` client whose pipe-tunnel sink "Y700 Speakers" writes s16le/2ch/48 kHz into
+`$XDG_RUNTIME_DIR/y700-speaker.fifo`. `speakerd.py` (root) opens the verified speaker graph (shared-memory endpoint ->
+PCM converter -> I2S LPAIF primary, data line SD1, 32-bit slots) when data arrives and closes it when idle. x86 games reach
+it through the x86 libpulse in the FEX RootFS. Verified: Dead Cells with sound and gamepad (248 s, 0 DSP errors).
+Gamepads: the desktop service also creates `/dev/hidrawN` for USB/BT HID devices (Steam Big Picture / Steam Input read
+controllers through hidraw); the compatibility tool sets `SDL_JOYSTICK_DISABLE_UDEV=1` so SDL games pick up pads plugged in
+later (inotify on `/dev/input`).
+
+## Boot order (not yet verified by a reboot)
+`y700-bringup.service` runs the stages up to `audio-c` (display, GPU, touch, ADC, Wi-Fi, Bluetooth, ADSP, audio; ~31 min).
+The desktop starts as soon as the display owner and GPU are ready and the remaining stages load underneath it: the display
+guard accepts a state that differs from the native one only by the registered desktop presenter (`registry.desktop_ok`:
+live presenter process of this boot/owner, desktop planes showing only its framebuffers, all other planes, CRTCs,
+connectors and positions unchanged), and underruns are counted from each stage's start. Stages watch the management link
+(USB Ethernet, else Wi-Fi, else none). `y700-speakerd.service` waits for the audio stages.
 
 ## Layout
 - `design/nextboot-impl/` — bring-up orchestrator, bundle builder/loader, guards (bootguard, registry), DRM helpers

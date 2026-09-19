@@ -175,7 +175,7 @@ if stage in ('wifi-a', 'wifi-b'):
     fw = {}
     for _l in Path('/home/siwal/y700-design/wifi-20260919/firmware/SHA256SUMS').read_text().split('\n'):
         if _l.strip(): _h, _f = _l.split(); fw[_f.replace('firmware/', '')] = _h
-    m['wifi'] = {'firmware': fw, 'net': 'enx<MAC>', 'pcie': '1c00000.pcie', 'cnss': 'b0000000.qcom,cnss-peach',
+    m['wifi'] = {'firmware': fw, 'net': MGMT_NET, 'pcie': '1c00000.pcie', 'cnss': 'b0000000.qcom,cnss-peach',
                  'wcal': '18900000.rsc:drv@2:rpmh-regulator-vrm-wcal',
                  # 16c0000 = qcom,canoe-pcie_anoc: PCIe-only NoC; its sync_state after the pcie+cnss bind is expected and allowed only
                  # while its consumer set is exactly {pcie_qtb (bound TBU), pcie, cnss} (checked by load-stage)
@@ -187,11 +187,20 @@ if stage in ('wifi-a', 'wifi-b'):
         import subprocess as _sp
         _cal = [l for l in _sp.run(['dmesg'], capture_output=True, text=True, check=True).stdout.splitlines() if 'cnss: Calibration took' in l]
         m['wifi']['calibration_done'] = _cal[-1] if _cal else None
+# Management link watched by the adc/wifi/bt/qrtr-smd/adsp/audio stages: the USB Ethernet adapter when it has carrier, else Wi-Fi
+# (2026-09-20: the side USB-C port is used by a gamepad; one USB controller serves both ports, so LAN and pad exclude each other)
+def _mgmt_net():
+    for n in ('enx<MAC>', 'wlan0'):
+        try:
+            if (Path('/sys/class/net')/n/'carrier').read_text().strip() == '1': return n
+        except OSError: pass
+    return None                                        # no management link at all (boot with a pad instead of LAN): check skipped
+MGMT_NET = _mgmt_net()
 BTFW = Path('/home/siwal/y700-design/bt-20260919/firmware')
 AUDFW = Path('/home/siwal/y700-design/audio-20260919/firmware')
 if stage == 'adsp':
     _sums = dict(reversed(l.split()) for l in (AUDFW/'SHA256SUMS').read_text().splitlines() if l.strip())
-    m['adsp'] = {'net': 'enx<MAC>', 'rproc': 'remoteproc1', 'rproc_name': '3000000.remoteproc-adsp',
+    m['adsp'] = {'net': MGMT_NET, 'rproc': 'remoteproc1', 'rproc_name': '3000000.remoteproc-adsp',
                  'firmware': {f: h for f, h in sorted(_sums.items()) if not f.endswith('.jsn')},
                  # all four PD JSON files from modem_a (Android pd-mapper reads them all): root, audio, sensor, ois
                  'jsn': ['adspr.jsn', 'adspua.jsn', 'adsps.jsn', 'adspuo.jsn'], 'jsn_sha256': {f: _sums[f] for f in ('adspr.jsn', 'adspua.jsn', 'adsps.jsn', 'adspuo.jsn')}}
@@ -221,7 +230,7 @@ if stage == 'susp-devices':
     m['suspend'].update({'stats_before': {f.name: rd(f).strip() for f in sorted(Path('/sys/power/suspend_stats').iterdir())}})
 if stage == 'adc':
     # DT: 15 thermal zones use vadc@9000 (phandle 0x719); none has a critical trip (xo-therm: passive 78/80 C + hot 90 C)
-    m['adc'] = {'net': 'enx<MAC>', 'vadc': 'c426000.spmi:pmk8850@0:vadc@9000',
+    m['adc'] = {'net': MGMT_NET, 'vadc': 'c426000.spmi:pmk8850@0:vadc@9000',
                 'zones': ['ap-therm', 'batt-pack-therm', 'batt2-pack-therm', 'fast-chg-therm', 'fcam-ntc', 'flash-led-ntc', 'lcm-thermal',
                           'quiet-therm', 'rear-cam-ntc', 'top-chg-therm', 'ufs-therm', 'usb1-conn-therm', 'usb2-conn-therm', 'wlan-therm', 'xo-therm'],
                 'temp_range_mC': [0, 70000], 'charger_msg': 'Failed to get usb1-conn-therm'}
@@ -246,21 +255,21 @@ if stage == 'audio-c3':
                   'extdisp_codec': 'soc:qcom,msm-ext-disp:qcom,msm-ext-disp-audio-codec-rx', 'sound': 'soc:spf_core_platform:sound'}
 if stage in ('audio-c2', 'audio-c'):
     # aw882xx_acf.bin from vendor-probe.img /firmware (debugfs dump, read-only)
-    m['audio'] = {'net': 'enx<MAC>', 'rproc': 'remoteproc1',
+    m['audio'] = {'net': MGMT_NET, 'rproc': 'remoteproc1',
                   'firmware_install': {'aw882xx_acf.bin': sha(Path('/home/siwal/y700-design/audio-20260919/aw882xx_acf.bin'))},
                   'amps': ['4-0034', '4-0037'], 'lpi': 'soc:spf_core_platform:lpi_pinctrl@07760000'}
     need(m['audio']['firmware_install']['aw882xx_acf.bin'] == 'd3133216d789643acd0be4ec7873e792d8f5f1b0ec162256927835db68f9f7f3', 'aw882xx_acf.bin changed')
 if stage == 'audio-c1':
-    m['audio'] = {'net': 'enx<MAC>', 'rproc': 'remoteproc1', 'gpr_rpmsg': '3000000.remoteproc-adsp:glink-edge.adsp_apps.-1.-1'}
+    m['audio'] = {'net': MGMT_NET, 'rproc': 'remoteproc1', 'gpr_rpmsg': '3000000.remoteproc-adsp:glink-edge.adsp_apps.-1.-1'}
 if stage == 'qrtr-smd':
-    m['qrtr'] = {'net': 'enx<MAC>', 'soccp_rpmsg': 'a3380000.remoteproc-soccp:glink-edge.IPCRTR.-1.-1', 'soccp_rproc': 'remoteproc0'}
+    m['qrtr'] = {'net': MGMT_NET, 'soccp_rpmsg': 'a3380000.remoteproc-soccp:glink-edge.IPCRTR.-1.-1', 'soccp_rproc': 'remoteproc0'}
 if stage == 'blescan':
     m['bt'] = {'net': 'enx<MAC>', 'hci': 'hci0', 'secs': 10}
 if stage == 'bt-b':
-    m['bt'] = {'net': 'enx<MAC>', 'uart': '1994000.qcom,qup_uart', 'power': 'soc:wcn786x'}
+    m['bt'] = {'net': MGMT_NET, 'uart': '1994000.qcom,qup_uart', 'power': 'soc:wcn786x'}
 if stage == 'btkeeper':
     _sums = dict(reversed(l.split()) for l in (BTFW/'SHA256SUMS').read_text().splitlines() if l.strip())
-    m['bt'] = {'net': 'enx<MAC>', 'uart': '1994000.qcom,qup_uart', 'power': 'soc:wcn786x', 'wlan': 'wlp1s0',
+    m['bt'] = {'net': MGMT_NET, 'uart': '1994000.qcom,qup_uart', 'power': 'soc:wcn786x', 'wlan': 'wlp1s0',
                'firmware': {f: _sums[f] for f in ('brhbtfw20.tlv', 'brhbtnv20.bin')},
                # values read by bt-probe (70037e22) on this chip
                'expect': {'product_id': 0x21, 'rom_ver': 0x0200, 'soc_id': 0x40210200}, 'retained_keepers': []}
@@ -275,7 +284,7 @@ if stage == 'btkeeper':
 if stage == 'bt-probe':
     m['bt'] = {'net': 'enx<MAC>', 'uart': '1994000.qcom,qup_uart', 'power': 'soc:wcn786x'}
 if stage == 'bt-a':
-    m['bt'] = {'uart': '1994000.qcom,qup_uart', 'power': 'soc:wcn786x', 'net': 'enx<MAC>',
+    m['bt'] = {'uart': '1994000.qcom,qup_uart', 'power': 'soc:wcn786x', 'net': MGMT_NET,
                # clk_virt (QUP core paths): the BT UART is its LAST unbound consumer -> its sync_state runs on this bind (the normal
                # Android end state). Allowed only while every other consumer is exactly this reviewed set and all of them are bound.
                'clk_virt': 'soc:interconnect@0',

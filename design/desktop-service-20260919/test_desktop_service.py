@@ -103,4 +103,32 @@ class InputDevs(unittest.TestCase):
             got = ds.external_input_devices(t)
             self.assertEqual(sorted(got), ['event4', 'event9']); self.assertEqual(got['event4'], (13, 68, 'Razer Kishi'))
 
+    def test_hidraw_external_only(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as t:
+            def mk(n, hid_id, dev, name):
+                d = Path(t)/n/'device'; d.mkdir(parents=True)
+                (d/'uevent').write_text('DRIVER=hid-generic\nHID_ID=%s\nHID_NAME=%s\n' % (hid_id, name)); (Path(t)/n/'dev').write_text(dev + '\n')
+            mk('hidraw0', '0003:00001532:00000724', '508:0', 'Razer Kishi'); mk('hidraw1', '0018:000006CB:00000001', '508:1', 'i2c touchpad')
+            mk('hidraw2', '0005:0000054C:000009CC', '508:2', 'BT pad')
+            got = ds.external_hidraw_devices(t)
+            self.assertEqual(sorted(got), ['hidraw0', 'hidraw2']); self.assertEqual(got['hidraw0'], (508, 0, 'Razer Kishi'))
+
+class Nodes(unittest.TestCase):
+    def test_sync_creates_and_removes(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as t:
+            made = []
+            orig = (ds.os.mknod, ds.os.chown, ds.os.chmod); had_dr = hasattr(ds, 'dr')
+            if not had_dr: import types; ds.dr = types.SimpleNamespace(UID=1000, GID=1000)
+            ds.os.mknod = lambda p, mode, dev: (made.append(str(p)), Path(p).write_text('')); ds.os.chown = lambda *a: None; ds.os.chmod = lambda *a: None
+            try:
+                (Path(t)/'input').mkdir(); n = ds.InputNodes(t)
+                cur = {Path(t)/'input'/'event7': (13, 71, 'pad'), Path(t)/'hidraw0': (508, 0, 'pad')}
+                n.sync(cur); self.assertEqual(sorted(made), sorted(str(p) for p in cur))
+                n.sync({}); self.assertFalse(any(p.exists() for p in cur)); self.assertEqual(n.made, {})
+            finally:
+                ds.os.mknod, ds.os.chown, ds.os.chmod = orig
+                if not had_dr: del ds.dr
+
 if __name__ == '__main__': unittest.main(verbosity=1)

@@ -285,29 +285,44 @@ def fix_run_ownership():
 
 EXTERNAL_BUSES = {0x0003, 0x0005}                              # BUS_USB, BUS_BLUETOOTH: gamepads, keyboards, mice
 
-def external_input_devices(sysroot='/sys/class/input'):
+def external_input_devices(sysroot='/sys/class/input', exclude=()):
     """{eventN: (major, minor, name)} for input devices on USB/Bluetooth (the internal gpio-keys/touch/pen and our
-    uinput touch proxy are virtual or on the SoC bus and are left to the seat shim)."""
+    uinput touch proxy are virtual or on the SoC bus and are left to the seat shim). exclude: (vendor, product) pairs
+    whose interfaces stay hidden (pads re-emitted by padproxy as an Xbox 360 pad)."""
     out = {}
     for d in sorted(Path(sysroot).glob('event*')):
         try:
             bus = int((d/'device/id/bustype').read_text(), 16)
             if bus not in EXTERNAL_BUSES: continue
+            if exclude and (int((d/'device/id/vendor').read_text(), 16), int((d/'device/id/product').read_text(), 16)) in exclude: continue
             ma, mi = map(int, (d/'dev').read_text().split(':')); out[d.name] = (ma, mi, (d/'device/name').read_text().strip())
         except (OSError, ValueError): continue
     return out
 
-def external_hidraw_devices(sysroot='/sys/class/hidraw'):
+def external_hidraw_devices(sysroot='/sys/class/hidraw', exclude=()):
     """{hidrawN: (major, minor, name)} for HID devices on USB/Bluetooth. Steam (Big Picture, Steam Input) reads
     controllers through hidraw, games mostly through evdev."""
     out = {}
     for d in sorted(Path(sysroot).glob('hidraw*')):
         try:
             ue = dict(l.split('=', 1) for l in (d/'device/uevent').read_text().splitlines() if '=' in l)
-            if int(ue.get('HID_ID', '0:0:0').split(':')[0], 16) not in EXTERNAL_BUSES: continue
+            hid = ue.get('HID_ID', '0:0:0').split(':')
+            if int(hid[0], 16) not in EXTERNAL_BUSES: continue
+            if exclude and (int(hid[1], 16), int(hid[2], 16)) in exclude: continue
             ma, mi = map(int, (d/'dev').read_text().split(':')); out[d.name] = (ma, mi, ue.get('HID_NAME', '?'))
         except (OSError, ValueError): continue
     return out
+
+def uinput_for_session(node='/dev/uinput'):
+    """Steam Input creates its virtual gamepad/keyboard/mouse through uinput (Ubuntu's steam-devices udev rule gives the
+    seat user access). Without it Big Picture loses D-pad, View, Menu and Guide (2026-09-20). Owner siwal, 0600."""
+    p = Path(node)
+    try:
+        if not p.exists():
+            ma, mi = map(int, Path('/sys/class/misc/uinput/dev').read_text().split(':')); os.mknod(p, 0o600 | stat.S_IFCHR, os.makedev(ma, mi))
+        st = os.lstat(p)
+        if stat.S_ISCHR(st.st_mode) and st.st_uid != dr.UID: os.chown(p, dr.UID, dr.GID); os.chmod(p, 0o600); log('UINPUT owner ->', dr.UID)
+    except OSError as e: log('UINPUT error', repr(e))
 
 class InputNodes:
     """/dev is a plain tmpfs here (no devtmpfs): nobody creates nodes for hot-plugged devices. Create /dev/input/eventN
@@ -315,11 +330,23 @@ class InputNodes:
     remove them on unplug."""
     def __init__(self, dev='/dev'): self.made = {}; self.dev = Path(dev)
     def scan(self):
-        cur = {self.dev/'input'/k: v for k, v in external_input_devices().items()}
-        cur.update({self.dev/k: v for k, v in external_hidraw_devices().items()})
+        import padproxy; hide = set(padproxy.REMAPS)
+        cur = {self.dev/'input'/k: v for k, v in external_input_devices(exclude=hide).items()}
+        cur.update({self.dev/k: v for k, v in external_hidraw_devices(exclude=hide).items()})
+        every = {self.dev/'input'/k: v for k, v in external_input_devices().items()}
+        every.update({self.dev/k: v for k, v in external_hidraw_devices().items()})
+        self.hidden = {n: v for n, v in every.items() if n not in cur}
         return cur
+    def unhide(self):
+        """remove nodes of remapped pads left by an earlier instance (only when the node is exactly that device)"""
+        for node, (ma, mi, name) in getattr(self, 'hidden', {}).items():
+            try:
+                st = os.lstat(node)
+                if stat.S_ISCHR(st.st_mode) and st.st_rdev == os.makedev(ma, mi): node.unlink(); log('INPUT node hidden (remapped pad)', node, repr(name))
+            except FileNotFoundError: pass
+            except OSError as e: log('INPUT hide error', node, repr(e))
     def sync(self, cur=None):
-        cur = self.scan() if cur is None else cur
+        if cur is None: cur = self.scan(); self.unhide()
         for node, (ma, mi, name) in cur.items():
             if self.made.get(node) == (ma, mi): continue
             try:
@@ -483,12 +510,13 @@ def main():
                     if lp: os.kill(lp, signal.SIGHUP)                 # labwc re-reads rc.xml: touch matrix follows
                 follow_rotation(arg); log('CTL rotate ->', arg, 'labwc', lp); return 'ok %d' % arg
             return '%s %s' % (act, arg)
+        import padproxy; pads = padproxy.PadProxies(log=log); pads.sync()
         ctl = Control(); inodes = InputNodes(); inodes.sync(); t_in = time.monotonic()
         back = 0; n = n0 = 0; copy_ms = 0.0; u_base = rg.underruns(c, reg['encoder_status']); t_stat = time.monotonic()
         while not STOP:
             if lab.poll() is not None: raise RuntimeError('compositor exited rc=%s' % lab.returncode)
             ctl.poll(on_ctl)
-            if time.monotonic() - t_in >= 1.0: inodes.sync(); t_in = time.monotonic()
+            if time.monotonic() - t_in >= 1.0: pads.sync(); inodes.sync(); t_in = time.monotonic()
             deg = T2DEG.get(head.get('transform'))
             if deg is not None and deg != state['rot']: follow_rotation(deg); log('ROTATION by the shell ->', deg)
             try: buf, info = cap.capture(damage=not S['first'], timeout=0.25)
@@ -541,6 +569,10 @@ def main():
             except NameError: pass
             shim.close()
         if ctl: ctl.close()
+        try: pads.close()
+        except NameError: pass
+        try: inodes.close()
+        except NameError: pass
         if tproxy: tproxy.close(); log('TOUCH proxy closed after', tproxy.frames, 'frames')
         restored = False
         try: commit_native(fd, reg); restored = True; log('RESTORED native layout')

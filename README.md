@@ -67,7 +67,9 @@ PCM converter -> I2S LPAIF primary, data line SD1, 32-bit slots) when data arriv
 it through the x86 libpulse in the FEX RootFS. Verified: Dead Cells with sound and gamepad (248 s, 0 DSP errors).
 Gamepads: the desktop service also creates `/dev/hidrawN` for USB/BT HID devices (Steam Big Picture / Steam Input read
 controllers through hidraw); the compatibility tool sets `SDL_JOYSTICK_DISABLE_UDEV=1` so SDL games pick up pads plugged in
-later (inotify on `/dev/input`).
+later (inotify on `/dev/input`). Kishi V3 Ultra: buttons, sticks, triggers and D-pad work in games; in Steam Big Picture
+the D-pad does not react although Steam's SDL mapping is correct (`dpup:h0.1`...) — open. `padproxy.py` (grab the pad and
+re-emit it as a uinput Xbox 360 pad) is included but disabled (`REMAPS = {}`): it did not change the Big Picture D-pad.
 
 ## Boot order (not yet verified by a reboot)
 `y700-bringup.service` runs the stages up to `audio-c` (display, GPU, touch, ADC, Wi-Fi, Bluetooth, ADSP, audio; ~31 min).

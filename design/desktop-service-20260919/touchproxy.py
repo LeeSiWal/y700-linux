@@ -78,8 +78,8 @@ class TouchProxy:
             os.mknod(node, 0o600 | stat.S_IFCHR, os.makedev(ma, mi))
         return str(node)
 
-    def __init__(self, src=None, src_name='NVTCapacitiveTouchScreen', matrix='1 0 0 0 1 0', log=print):
-        self.log = log
+    def __init__(self, src=None, src_name='NVTCapacitiveTouchScreen', matrix='1 0 0 0 1 0', log=print, on_input=None):
+        self.log = log; self.on_input = on_input          # called from the reader thread on any touch (wake from sleep)
         if src is None: src = self.find(src_name); log('TOUCH source', src)
         n = src.rsplit('/', 1)[1]
         if Path('/sys/class/input/%s/device/name' % n).read_text().strip() != src_name: raise RuntimeError('touch identity changed: ' + src)
@@ -114,6 +114,9 @@ class TouchProxy:
             try: data = os.read(self.src, EVENT.size * 64)
             except BlockingIOError: continue
             except OSError as e: self.log('TOUCH proxy read error', repr(e)); return
+            if self.on_input:
+                try: self.on_input()
+                except Exception as e: self.log('TOUCH on_input error', repr(e))
             out = []
             with self.lock:
                 for i in range(0, len(data) - len(data) % EVENT.size, EVENT.size):

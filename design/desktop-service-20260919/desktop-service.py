@@ -74,6 +74,19 @@ def planes_for(fd, reg, fb, sw=W, sh=H):
                               (p['CRTC_W'][0], half), (p['CRTC_H'][0], H)]
     return {t['left']: pl(lp, 0, 0), t['right']: pl(rp, shalf, half)}
 
+def blank_props(fd, reg, on):
+    """Panel off/on for display sleep: the planes are detached and the CRTC deactivated (a modeset), which stops the
+    DPU and the DSI link - the backlight alone leaves ~3 W of scanout running. on=True restores the CRTC; the caller
+    commits the planes again with the current framebuffer."""
+    t = reg['topology']
+    cp = k.properties(fd, t['crtc'], k.OBJECT_CRTC)
+    props = {t['crtc']: [(cp['ACTIVE'][0], 1 if on else 0)]}
+    if not on:
+        for side in ('left', 'right'):
+            pp = k.properties(fd, t[side], k.OBJECT_PLANE)
+            props[t[side]] = [(pp['FB_ID'][0], 0), (pp['CRTC_ID'][0], 0)]
+    return props
+
 # render resolution (percent of the panel) -> framebuffer size; the logical desktop stays 952x1520 (output scale = w/952)
 RESOLUTIONS = {100: (1904, 3040), 90: (1712, 2736), 80: (1524, 2432), 67: (1276, 2036), 50: (952, 1520)}
 LOGICAL_W = 952
@@ -175,6 +188,12 @@ def parse_ctl(line, cur_bl, bl_max, cur_rot):
         if a[1] == 'get': return ('get', 'resolution')
         if a[1].isdigit() and int(a[1]) in RESOLUTIONS: return ('resolution', int(a[1]))
         return ('error', 'resolution get|%s' % '|'.join(str(x) for x in sorted(RESOLUTIONS, reverse=True)))
+    if a[0] == 'sleep' and len(a) in (1, 2):
+        if len(a) == 1 or a[1] == 'on': return ('sleep', True)
+        if a[1] == 'off': return ('sleep', False)
+        if a[1] == 'get': return ('get', 'sleep')
+        return ('error', 'sleep [on|off|get]')
+    if a[0] == 'wake' and len(a) == 1: return ('sleep', False)
     if a[0] == 'touch' and len(a) == 2:
         if a[1].isdigit() and int(a[1]) in ROTATIONS: return ('touch', int(a[1]))
         return ('error', 'touch 0|90|180|270 (extra touch rotation)')
@@ -489,7 +508,9 @@ def main():
         if e: log('FREE errors', e)
     try:
         pct0, rw0, rh0 = resolution_config()
-        S = {'fbs': alloc(rw0, rh0), 'w': rw0, 'h': rh0, 'pct': pct0, 'old': None, 'first': True, 'watch': None}
+        S = {'fbs': alloc(rw0, rh0), 'w': rw0, 'h': rh0, 'pct': pct0, 'old': None, 'first': True, 'watch': None,
+             'asleep': False, 'panel_off': False, 'bl': None}
+        wake = {'req': False}                  # set from the touch proxy thread (single assignment, no lock needed)
         shim = dr.Shim(reg); shim.device_fd_orig = shim.device_fd
         shim.device_fd = lambda p: (_ for _ in ()).throw(PermissionError(p)) if p.startswith('/dev/dri/') else shim.device_fd_orig(p)
         rot0 = rotation_config()[0]; shell0 = shell_config()
@@ -498,7 +519,8 @@ def main():
             # the seat shim hands out only that device (the real NVT touchscreen is read here, not by the compositor)
             import touchproxy
             toff = touch_offset(rot0, shell0)
-            tproxy = touchproxy.TouchProxy(matrix=touch_matrix(rot0, toff), log=log); log('TOUCH offset', toff)
+            tproxy = touchproxy.TouchProxy(matrix=touch_matrix(rot0, toff), log=log,
+                                           on_input=lambda: wake.__setitem__('req', True)); log('TOUCH offset', toff)
             dr.INPUTS.pop(tproxy.src_path, None); dr.INPUTS[tproxy.path] = touchproxy.NAME
         env = {'PATH': '/usr/bin:/bin', 'HOME': '/home/siwal', 'USER': 'siwal', 'XDG_RUNTIME_DIR': str(RUN), 'LIBSEAT_BACKEND': 'seatd',
                'SEATD_SOCK': str(dr.SOCK), 'LANG': 'C.UTF-8', 'WLR_BACKENDS': 'headless,libinput', 'WLR_RENDERER': 'pixman',
@@ -578,12 +600,44 @@ def main():
             prev = S['pct']; S.update(old=S['fbs'], fbs=new, w=nw, h=nh, pct=pct, first=True,
                                       watch=(time.monotonic() + 6, rg.underruns(c, reg['encoder_status']), prev, reason))
             log('RESOLUTION', prev, '->', pct, '%dx%d' % (nw, nh), 'scale %.3f' % (nw / LOGICAL_W), reason); return 'ok %d' % pct
+        def set_sleep(on):
+            """Display sleep. The backlight is the obvious part (measured: 4.1 W -> 3.0 W at this brightness), but the
+            panel keeps scanning out at 120 Hz, so with sleep_display_off the planes are detached and the CRTC is
+            deactivated as well. Any input through the touch proxy wakes it; a bring-up stage would refuse to run while
+            the panel is off (its display guard checks the planes), which is fine after boot."""
+            if on == S['asleep']: return 'ok %s' % ('asleep' if on else 'awake')
+            if on:
+                S['bl'] = int(c.read(BACKLIGHT/'brightness')); (BACKLIGHT/'brightness').write_text('0')
+                S['asleep'] = True; S['panel_off'] = False
+                if desktop_conf().get('sleep_display_off', True):
+                    props = blank_props(fd, reg, False); objs = list(props)
+                    try:
+                        k.atomic(fd, k.ATOMIC_TEST_ONLY | k.ATOMIC_ALLOW_MODESET, objs, props)
+                        k.atomic(fd, k.ATOMIC_ALLOW_MODESET, objs, props); S['panel_off'] = True
+                    except OSError as e: log('SLEEP panel off refused, backlight only:', repr(e))
+                log('SLEEP on panel_off=%s bl=%s' % (S['panel_off'], S['bl']))
+            else:
+                if S['panel_off']:
+                    d = S['fbs'][0]
+                    props = blank_props(fd, reg, True); props.update(planes_for(fd, reg, d['fb'], S['w'], S['h']))
+                    objs = list(props)
+                    k.atomic(fd, k.ATOMIC_TEST_ONLY | k.ATOMIC_ALLOW_MODESET, objs, props)
+                    k.atomic(fd, k.ATOMIC_ALLOW_MODESET, objs, props); S['panel_off'] = False
+                if S['bl']: (BACKLIGHT/'brightness').write_text('%d' % S['bl'])
+                S['asleep'] = False; S['first'] = True            # next capture is a full frame, with a TEST commit
+                log('SLEEP off')
+            return 'ok %s' % ('asleep' if on else 'awake')
+
         def on_ctl(req):
             bl_max = int(c.read(BACKLIGHT/'max_brightness')); cur = int(c.read(BACKLIGHT/'brightness'))
             act, arg = parse_ctl(req, cur, bl_max, state['rot'])
             if act == 'brightness':
                 (BACKLIGHT/'brightness').write_text('%d' % arg); log('CTL brightness', cur, '->', arg); return 'ok %d' % round(arg * 100 / bl_max)
             if act == 'get' and arg == 'resolution': return 'ok %d' % S['pct']
+            if act == 'get' and arg == 'sleep': return 'ok %s' % ('asleep' if S['asleep'] else 'awake')
+            if act == 'sleep':
+                try: return set_sleep(arg)
+                except OSError as e: log('SLEEP error', repr(e)); return 'error %r' % (e,)
             if act == 'resolution': return switch_resolution(arg)
             if act == 'touch':
                 if not tproxy: return 'error no touch proxy in this shell'
@@ -608,6 +662,12 @@ def main():
             if time.monotonic() - t_in >= 1.0: pads.sync(); inodes.sync(); t_in = time.monotonic()
             deg = T2DEG.get(head.get('transform'))
             if deg is not None and deg != state['rot']: follow_rotation(deg); log('ROTATION by the shell ->', deg)
+            if wake['req']:
+                wake['req'] = False
+                if S['asleep']:
+                    try: set_sleep(False)
+                    except OSError as e: log('WAKE failed', repr(e))
+            if S['asleep']: time.sleep(0.2); continue                         # no capture, no flips while the panel sleeps
             zc['target'] = S['fbs'][back]                                    # where the compositor should paint next
             try: buf, info = cap.capture(damage=not S['first'], timeout=0.25)
             except TimeoutError: buf = None

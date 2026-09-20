@@ -12,8 +12,10 @@ import sys
 import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-os.environ.setdefault('XDG_RUNTIME_DIR', '/run/y700-desktop')
-os.environ.setdefault('WAYLAND_DISPLAY', 'wayland-0')
+# the desktop session lives in its own runtime dir; a caller's XDG_RUNTIME_DIR (ssh login session) must not win
+if os.path.exists('/run/y700-desktop/wayland-0'):
+    os.environ['XDG_RUNTIME_DIR'] = '/run/y700-desktop'
+    os.environ['WAYLAND_DISPLAY'] = 'wayland-0'
 
 
 def png(path, rows):

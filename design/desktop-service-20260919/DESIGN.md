@@ -133,3 +133,12 @@ Later, separate: on-screen keyboard / launcher packages (apt), Steam.
   died on "touch identity changed"; it now waits for the touch stage too when the touch proxy is on. touchproxy also
   resolves the touchscreen by NAME and creates /dev/input/eventN from sysfs - /dev is a plain tmpfs, so on a fresh
   boot no input node exists and the event numbers move between boots.
+- 2026-09-21 display sleep (y700-ctl sleep on|off|get, wake; app grid entry "화면 끄기"): the backlight goes to 0 and,
+  with desktop.json sleep_display_off (default true), both planes are detached and the CRTC deactivated through an
+  atomic modeset (TEST_ONLY first; on refusal it stays backlight-only and says so in the log). Any touch wakes it -
+  touchproxy calls back into the service, which re-enables the CRTC, re-commits the planes and repaints in full.
+  Measured on battery at 46% brightness: awake 1073 mA (4.16 W) -> asleep 393 mA (1.53 W), 63% less; the backlight
+  alone accounts for ~1.1 W of that, the panel pipeline for the rest. Wake verified visually, underruns 0.
+  While the panel is off a bring-up stage would refuse to run (its display guard checks the planes) - fine after boot.
+  Not done yet (user deferred): an idle timer, and a hardware button - gpio-keys only reports KEY_VOLUMEUP here, the
+  power button hangs off the PMIC and no PON input driver exists in the 229 vendor modules the bundles know.

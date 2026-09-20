@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=화면 끄기
+GenericName=Screen off
+Comment=Panel off: backlight and the display pipeline (CRTC) stop - 4.2 W drops to 1.5 W. Touch the screen to wake.
+Exec=/home/siwal/y700-design/desktop-service-20260919/y700-ctl sleep on
+Icon=weather-clear-night-symbolic
+Categories=Settings;
+X-Purism-FormFactor=Workstation;Mobile;
+Terminal=false

@@ -19,7 +19,7 @@ native arm64 Steam client and ARM64 Proton** (ARM64 wine + bundled FEX + DXVK on
 | Area | State |
 |---|---|
 | Boot | Ubuntu userspace on the stock kernel; staged bring-up service loads reviewed module bundles after boot (`design/nextboot-impl`, `bringup.py`) |
-| Display | 1904x3040@120 dual-DSI panel driven from user space: DRM owner process + two-plane presenter; live render resolution 50–100 % with plane scaling; the scanout buffers come from the vendor dma-buf heap and are handed to `wl_shm`, so the compositor paints straight into them (no per-frame copy) |
+| Display | 1904x3040@120 dual-DSI panel driven from user space: DRM owner process + two-plane presenter; live render resolution 50–100 % with plane scaling; the scanout buffers come from the vendor dma-buf heap and are handed to `wl_shm`, so the compositor paints straight into them (no per-frame copy); display sleep turns the backlight and the CRTC off (4.16 W → 1.53 W) and any touch wakes it |
 | Desktop | Phosh (phoc) or labwc on a headless wlroots output, shown on the panel by `desktop-service.py` (systemd), rotation, touch calibration (uinput proxy for phoc), brightness, settings app |
 | Input | Touch (NVT), keys; on-screen keyboard; an X input guard closes a hidden second window of an X app (Steam's Friends/Settings), which otherwise swallows every tap because phoc never restacks Xwayland windows; USB/Bluetooth input hot-plug (the desktop service creates `/dev/input` nodes for external devices: `/dev` is a plain tmpfs here, not devtmpfs); Razer Kishi V3 Ultra verified in Dead Cells |
 | GPU | turnip (Mesa 26.2.3, KGSL backend, x11/wayland WSI) — native and x86 (FEX Vulkan thunk) vkcube on the panel |

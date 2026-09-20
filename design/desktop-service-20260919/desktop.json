@@ -10,5 +10,6 @@
   "steam"
  ],
  "x_guard_grace": 2.0,
- "presenter_zerocopy": true
+ "presenter_zerocopy": true,
+ "panel_hz": 60
 }

@@ -74,6 +74,22 @@ def planes_for(fd, reg, fb, sw=W, sh=H):
                               (p['CRTC_W'][0], half), (p['CRTC_H'][0], H)]
     return {t['left']: pl(lp, 0, 0), t['right']: pl(rp, shalf, half)}
 
+def connector_modes(fd, connector_id):
+    """Every mode the panel offers (this one: 1904x3040 at 30/60/90/120/144/165 Hz), as (fields, raw) pairs.
+    Two-call pattern: ask for the counts, then hand the kernel a buffer for the mode array."""
+    r = drmabi.ioctl(fd, 'GETCONNECTOR', k.GETCONNECTOR, 0, 0, 0, 0, 0, 0, 0, 0, connector_id, 0, 0, 0, 0, 0, 0, 0)
+    n = r[4]
+    if not n: return []
+    buf = ctypes.create_string_buffer(n * k.MODEINFO.size)
+    drmabi.ioctl(fd, 'GETCONNECTOR', k.GETCONNECTOR, 0, ctypes.addressof(buf), 0, 0, n, 0, 0, 0, connector_id,
+                 0, 0, 0, 0, 0, 0, 0)
+    out = []
+    for i in range(n):
+        raw = bytes(buf.raw[i * k.MODEINFO.size:(i + 1) * k.MODEINFO.size])
+        out.append((k.mode_fields(raw), raw))
+    return out
+
+
 def blank_props(fd, reg, on):
     """Panel off/on for display sleep: the planes are detached and the CRTC deactivated (a modeset), which stops the
     DPU and the DSI link - the backlight alone leaves ~3 W of scanout running. on=True restores the CRTC; the caller
@@ -188,6 +204,10 @@ def parse_ctl(line, cur_bl, bl_max, cur_rot):
         if a[1] == 'get': return ('get', 'resolution')
         if a[1].isdigit() and int(a[1]) in RESOLUTIONS: return ('resolution', int(a[1]))
         return ('error', 'resolution get|%s' % '|'.join(str(x) for x in sorted(RESOLUTIONS, reverse=True)))
+    if a[0] == 'refresh' and len(a) == 2:
+        if a[1] == 'get': return ('get', 'refresh')
+        if a[1].isdigit(): return ('refresh', int(a[1]))
+        return ('error', 'refresh get|<hz>')
     if a[0] == 'sleep' and len(a) in (1, 2):
         if len(a) == 1 or a[1] == 'on': return ('sleep', True)
         if a[1] == 'off': return ('sleep', False)
@@ -279,7 +299,21 @@ def session_config(rot, matrix):
     for f in [d] + list(d.iterdir()): os.chown(f, dr.UID, dr.GID)
     return d
 
+def restore_boot_mode(fd, reg):
+    """Put the panel back on the mode the owner recorded at boot. The refresh rate is ours to change while the
+    service runs (y700-ctl refresh), but the next start compares the whole DRM state with that record, so leaving the
+    panel at 60 Hz made the service refuse to start with 'display not in the native state'."""
+    cp = k.properties(fd, reg['topology']['crtc'], k.OBJECT_CRTC)
+    if not reg.get('mode_blob') or cp['MODE_ID'][1] == reg['mode_blob']: return False
+    props = {reg['topology']['crtc']: [(cp['MODE_ID'][0], k.create_blob(fd, k.read_mode(fd, reg['mode_blob']))),
+                                       (cp['ACTIVE'][0], 1)]}
+    props.update(planes_for(fd, reg, reg['native_fb'])); objs = list(props)
+    k.atomic(fd, k.ATOMIC_TEST_ONLY | k.ATOMIC_ALLOW_MODESET, objs, props)
+    k.atomic(fd, k.ATOMIC_ALLOW_MODESET, objs, props)
+    return True
+
 def commit_native(fd, reg):
+    if restore_boot_mode(fd, reg): return                     # that commit already put the native fb on both planes
     props = planes_for(fd, reg, reg['native_fb']); objs = list(props)
     k.atomic(fd, k.ATOMIC_TEST_ONLY, objs, props); k.atomic(fd, 0, objs, props)
 
@@ -331,6 +365,11 @@ def recover(reg, boot):
         act, arg = recovery_action(rec, boot, reg['owner'], plane_fbs, reg['native_fb'], set(drmabi.fb_ids(fd)))
         log('RECOVERY', act, arg, 'planes', plane_fbs)
         if act == 'refuse': raise Precondition('screen state not ours: ' + arg)
+        try:
+            if restore_boot_mode(fd, reg):
+                time.sleep(1.5)                      # the modeset lands asynchronously; the state check reads it next
+                log('RECOVERY panel back on the boot mode')
+        except OSError as e: log('RECOVERY boot mode restore failed', repr(e))
         if act in ('restore', 'cleanup'):
             if act == 'restore': commit_native(fd, reg); log('RECOVERY native layout committed')
             # all recorded handles are ours (a handle is recorded before its FB exists); a handle already gone is fine
@@ -452,7 +491,13 @@ def main():
     prepare_gpu_node()
     recover(reg, boot)
     native = c.read(reg['native_state_file']); now = c.read(rg.DEBUG/'state')
-    if not (now == native or now in rg.rebased_states(c, reg, native)): raise Precondition('display not in the native state')
+    if not (now == native or now in rg.rebased_states(c, reg, native)):
+        time.sleep(2); now = c.read(rg.DEBUG/'state')        # one retry: a modeset we just undid may still be settling
+    if not (now == native or now in rg.rebased_states(c, reg, native)):
+        import difflib
+        d = [l for l in difflib.unified_diff(native.splitlines(), now.splitlines(), 'native', 'now', lineterm='', n=1)][:14]
+        for l in d: log('STATE', l)
+        raise Precondition('display not in the native state')
     v0 = dr.drm_view(reg)
     if not (v0['master_pid_ok'] and v0['clients'] == 1): raise Precondition('owner is not the sole DRM master')
     for p in RUN.glob('wayland-*'): p.unlink()                      # stale sockets of a crashed instance (siwal dir)
@@ -615,6 +660,48 @@ def main():
                     except OSError as e: log('SLEEP cannot watch', node, repr(e))
             return out
 
+        def current_refresh():
+            cp = k.properties(fd, reg['topology']['crtc'], k.OBJECT_CRTC)
+            return k.mode_fields(k.read_mode(fd, cp['MODE_ID'][1]))['vrefresh']
+
+        def set_refresh(hz):
+            """Panel refresh rate. The compositor output runs at 60 Hz, so scanning out at 120 costs DPU and DSI power
+            for frames nobody produced; 120 (or more) is still one command away for when it is wanted. The modeset is
+            tested first, then committed with the planes, and reverted if the encoder starts reporting underruns."""
+            modes = [(f, raw) for f, raw in connector_modes(fd, reg['topology']['connector'])
+                     if (f['hdisplay'], f['vdisplay']) == (W, H)]
+            if not modes: return 'error no modes on the connector'
+            have = sorted({f['vrefresh'] for f, _ in modes})
+            pick = [(f, raw) for f, raw in modes if f['vrefresh'] == hz]
+            if not pick: return 'error %d Hz not offered (have %s)' % (hz, have)
+            before = current_refresh()
+            if before == hz: return 'ok %d' % hz
+            cp = k.properties(fd, reg['topology']['crtc'], k.OBJECT_CRTC)
+            old_blob = cp['MODE_ID'][1]
+            u0 = rg.underruns(c, reg['encoder_status'])
+            def commit(raw):
+                blob = k.create_blob(fd, raw)
+                d = S['fbs'][0]
+                props = {reg['topology']['crtc']: [(cp['MODE_ID'][0], blob), (cp['ACTIVE'][0], 1)]}
+                props.update(planes_for(fd, reg, d['fb'], S['w'], S['h']))
+                objs = list(props)
+                k.atomic(fd, k.ATOMIC_TEST_ONLY | k.ATOMIC_ALLOW_MODESET, objs, props)
+                k.atomic(fd, k.ATOMIC_ALLOW_MODESET, objs, props)
+            try: commit(pick[0][1])
+            except OSError as e: log('REFRESH %d Hz refused' % hz, repr(e)); return 'error modeset refused %r' % (e,)
+            time.sleep(4)
+            u1 = rg.underruns(c, reg['encoder_status'])
+            if any(u1[i] > u0[i] for i in u1):
+                log('REFRESH %d Hz caused underruns %s -> %s, going back to %d' % (hz, u0, u1, before))
+                try:
+                    back_raw = [raw for f, raw in modes if f['vrefresh'] == before]
+                    commit(back_raw[0] if back_raw else k.read_mode(fd, old_blob))
+                except OSError as e: log('REFRESH revert failed', repr(e))
+                return 'error %d Hz underruns, reverted' % hz
+            S['first'] = True                                        # repaint with a TEST commit on the new mode
+            log('REFRESH %d -> %d Hz (underruns %s)' % (before, hz, u1))
+            return 'ok %d' % hz
+
         def set_sleep(on):
             """Display sleep. The backlight is the obvious part (measured: 4.1 W -> 3.0 W at this brightness), but the
             panel keeps scanning out at 120 Hz, so with sleep_display_off the planes are detached and the CRTC is
@@ -655,6 +742,13 @@ def main():
                 (BACKLIGHT/'brightness').write_text('%d' % arg); log('CTL brightness', cur, '->', arg); return 'ok %d' % round(arg * 100 / bl_max)
             if act == 'get' and arg == 'resolution': return 'ok %d' % S['pct']
             if act == 'get' and arg == 'sleep': return 'ok %s' % ('asleep' if S['asleep'] else 'awake')
+            if act == 'get' and arg == 'refresh':
+                try: return 'ok %d' % current_refresh()
+                except OSError as e: return 'error %r' % (e,)
+            if act == 'refresh':
+                if S['asleep']: return 'error asleep'
+                try: return set_refresh(arg)
+                except OSError as e: log('REFRESH error', repr(e)); return 'error %r' % (e,)
             if act == 'sleep':
                 try: return set_sleep(arg)
                 except OSError as e: log('SLEEP error', repr(e)); return 'error %r' % (e,)
@@ -676,6 +770,14 @@ def main():
         import padproxy; pads = padproxy.PadProxies(log=log); pads.sync()
         ctl = Control(); inodes = InputNodes(); inodes.sync(); t_in = time.monotonic()
         back = 0; n = n0 = 0; copy_ms = 0.0; u_base = rg.underruns(c, reg['encoder_status']); t_stat = time.monotonic()
+        hz = desktop_conf().get('panel_hz')
+        if hz:
+            # the panel defaults to its highest mode; at 60 Hz it costs 0.56 W less and shows exactly the same frames
+            # (the compositor output is 60 Hz and the presenter tops out around 53 fps). y700-ctl refresh <hz> changes
+            # it live - 120 and 165 are one command away.
+            try: log('PANEL_HZ', set_refresh(int(hz)))
+            except OSError as e: log('PANEL_HZ %s failed' % hz, repr(e))
+
         while not STOP:
             if lab.poll() is not None: raise RuntimeError('compositor exited rc=%s' % lab.returncode)
             ctl.poll(on_ctl)

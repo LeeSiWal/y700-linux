@@ -150,3 +150,13 @@ Later, separate: on-screen keyboard / launcher packages (apt), Steam.
   wakes the screen. Verified: sleep 06:51:12 -> volume up -> wake 06:51:18. For touch-to-wake instead, set
   desktop.json sleep_display_off=false: the backlight goes off but the panel keeps scanning out, so it saves ~1.1 W
   of the 2.6 W.
+- 2026-09-21 panel refresh rate (y700-ctl refresh get|<hz>, desktop.json panel_hz, default 60): the panel offers
+  1904x3040 at 30/60/90/120/144/165 Hz and comes up on its highest mode, but the compositor output is 60 Hz and the
+  presenter tops out near 53 fps, so 120 Hz scans out frames nobody produced. Measured on battery, idle desktop:
+  120 Hz 969 mA (3.78 W), 60 Hz 826 mA (3.22 W), repeat 825 mA - 0.56 W, 17 %. The change is a modeset built from the
+  connector mode list (GETCONNECTOR two-call), TEST_ONLY first, then committed with the planes; underruns are watched
+  for 4 s and the previous mode is restored if any appear. y700-ctl had to grow a longer timeout for that wait.
+  Note for anyone adding a similar knob: the service compares the whole DRM state with the one the owner recorded at
+  boot, so a changed mode made the next start refuse with "display not in the native state". restore_boot_mode() now
+  puts the panel back on the boot mode on exit and during recovery (and the state check retries once, because the
+  modeset lands asynchronously); the configured rate is applied again once the presenter is up.

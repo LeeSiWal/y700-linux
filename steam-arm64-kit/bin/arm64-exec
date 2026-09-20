@@ -1,0 +1,7 @@
+#!/bin/bash
+# steam.sh always launches $STEAMROOT/ubuntu12_32/steam (x86) and the bootstrapper restores that file on every start,
+# so the launch is redirected here through STEAM_DEBUGGER: drop the x86 path it was given, run the native arm64 client.
+R=/home/siwal/y700-steam-arm64/root
+shift || true
+export LD_LIBRARY_PATH="$R/steamrtarm64:$R/linuxarm64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$R/steamrtarm64/steam" "$@"

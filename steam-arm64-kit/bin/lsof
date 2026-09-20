@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Minimal lsof stand-in for Steam's GetIPCConnectionDetails (this image has no lsof, and sudo needs a terminal here).
+
+Steam runs:  lsof -P -F upnR -i TCP@127.0.0.1:<port>
+and parses the -F field output to learn which process owns the socket on <port>
+(the webhelper's end of the WebUI websocket).  Without it every WebUITransport
+connection is rejected -> "Steamwebhelper is not responding".
+
+Only that one usage is implemented, from /proc/net/tcp{,6} + /proc/<pid>/fd.
+If a real lsof is installed later it is used instead.
+"""
+import os, sys, glob, socket, struct
+
+for real in ('/usr/sbin/lsof', '/usr/bin/lsof', '/sbin/lsof', '/bin/lsof'):
+    if os.access(real, os.X_OK):
+        os.execv(real, [real] + sys.argv[1:])
+
+argv = sys.argv[1:]
+spec = None
+for i, a in enumerate(argv):
+    if a.startswith('-i'):
+        spec = a[2:] or (argv[i + 1] if i + 1 < len(argv) else '')
+        break
+if spec is None:
+    sys.exit(1)
+spec = spec.split('@', 1)[1] if '@' in spec else spec       # "TCP@127.0.0.1:49716"
+host, _, port = spec.rpartition(':')
+try:
+    want_port = int(port)
+except ValueError:
+    sys.exit(1)
+
+
+def addr(hexaddr):
+    """/proc/net/tcp address -> ("127.0.0.1", port); handles v4 and v6 (incl. v4-mapped)."""
+    h, p = hexaddr.split(':')
+    p = int(p, 16)
+    raw = bytes.fromhex(h)
+    if len(raw) == 4:
+        return socket.inet_ntop(socket.AF_INET, raw[::-1]), p
+    words = [raw[i:i + 4][::-1] for i in range(0, 16, 4)]
+    b = b''.join(words)
+    if b[:12] == b'\0' * 10 + b'\xff\xff':
+        return socket.inet_ntop(socket.AF_INET, b[12:]), p
+    return socket.inet_ntop(socket.AF_INET6, b), p
+
+
+conns = {}                                                  # inode -> (name, uid)
+for path in ('/proc/net/tcp', '/proc/net/tcp6'):
+    try:
+        lines = open(path).read().splitlines()[1:]
+    except OSError:
+        continue
+    for line in lines:
+        f = line.split()
+        if len(f) < 10:
+            continue
+        lip, lport = addr(f[1])
+        rip, rport = addr(f[2])
+        if want_port not in (lport, rport):
+            continue
+        if host and host not in (lip, rip):
+            continue
+        if rport == 0:                                      # listening socket: no "->" pair to report
+            continue
+        conns[f[9]] = ('%s:%d->%s:%d' % (lip, lport, rip, rport), int(f[7]))
+
+if not conns:
+    sys.exit(1)
+
+out = []
+for pid_dir in glob.glob('/proc/[0-9]*'):
+    pid = os.path.basename(pid_dir)
+    hits = []
+    try:
+        fds = os.listdir(pid_dir + '/fd')
+    except OSError:
+        continue
+    for fd in fds:
+        try:
+            link = os.readlink('%s/fd/%s' % (pid_dir, fd))
+        except OSError:
+            continue
+        if not link.startswith('socket:['):
+            continue
+        ino = link[8:-1]
+        if ino in conns:
+            hits.append((fd, conns[ino]))
+    if not hits:
+        continue
+    ppid, uid = '0', hits[0][1][1]
+    try:
+        for line in open(pid_dir + '/status'):
+            if line.startswith('PPid:'):
+                ppid = line.split()[1]
+            elif line.startswith('Uid:'):
+                uid = line.split()[1]
+    except OSError:
+        pass
+    out.append('p%s\nR%s\nu%s' % (pid, ppid, uid))
+    for _fd, (name, _uid) in hits:                          # real lsof -F upnR prints no f field
+        out.append('n%s' % name)
+
+if not out:
+    sys.exit(1)
+print('\n'.join(out))

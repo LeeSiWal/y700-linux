@@ -1,0 +1,67 @@
+#!/bin/bash
+# Valve's official Proton 11.0 ARM64 (app 4628740, depot 4628741) driven WITHOUT the Steam Linux Runtime container:
+# this kernel has no user/pid namespaces, so pressure-vessel cannot build the container that Proton's own
+# require_tool_appid (4185400, SLR4 arm64) would pull in. Proton's own `proton` script still does everything else
+# (prefix from default_pfx_arm64, DXVK/vkd3d, bundled FEX for the x86-64 parts, lsteamclient), we only supply the
+# device environment it would normally inherit from the container.
+P=/home/siwal/.local/share/Steam/ubuntu12_32/steamapps/content/app_4628740/depot_4628741
+L=/home/siwal/y700-agent/y700-proton-arm64-$(date +%Y%m%d).log
+{ printf '%s verb=%s cmd:' "$(date +%T)" "$1"; printf ' %q' "${@:2}"; echo; } >> "$L"
+verb=$1; shift; [ "$1" = "--" ] && shift                  # Steam does not pass --, but do not trip over it
+
+# turnip on KGSL has no DRI3/dma-buf WSI here: software present path, same as every other GPU client on this device
+export VK_DRIVER_FILES=/home/siwal/y700-gpu/turnip-kgsl-26.2.3-wsi/share/vulkan/icd.d/freedreno_icd.aarch64.json
+export MESA_VK_WSI_DEBUG=${MESA_VK_WSI_DEBUG:-sw}
+unset VK_ICD_FILENAMES FEX_THUNKCONFIG                    # FEX thunks are for the x86 client, not for ARM64 wine
+export LD_LIBRARY_PATH="$P/files/lib/aarch64-linux-gnu:$P/files/lib:/home/siwal/y700-gpu/extra-libs/x/usr/lib/aarch64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# FEX tuning (Proton turns these two into its proton-fex-config.json). With Valve's defaults this game ran the whole
+# engine on one emulated thread at 100% CPU, 2-6 fps, GPU idle, and the wine log filled with "Handled unaligned
+# atomic" traps; TSO off + multiblock measured 60-78 fps with the GPU at ~80%. TSOEnabled=0 drops the x86 memory
+# ordering guarantees, so a game with real data races can misbehave - set Y700_FEX_TSO=1 to get Valve's safe default.
+: "${Y700_FEX_TSO:=0}"
+: "${Y700_FEX_MULTIBLOCK:=1}"
+export STEAM_FEX_TSOENABLED="$Y700_FEX_TSO" STEAM_FEX_MULTIBLOCK="$Y700_FEX_MULTIBLOCK"
+
+# gamepad hot-plug: /dev/input nodes are made by the desktop service, udev knows nothing about them
+export SDL_JOYSTICK_DISABLE_UDEV=1
+export DXVK_LOG_PATH="${DXVK_LOG_PATH:-/home/siwal/y700-agent}"
+# FIFO (vsync) presents crawl at ~0.8 fps here: with the software WSI path on Xwayland the present wait falls back to
+# a ~1 s timer, and the game's whole loading sequence is gated on it (measured: 0.8 fps -> 58 fps with syncInterval 0).
+# Frame pacing is the two-plane presenter's job anyway, so let the game present as fast as it renders.
+# Frame pacing: free-running presents pin the GPU at ~95%, y700-thermald then steps the GPU cap 1050 -> 726 MHz and
+# the CPU caps with it, so the rate swings. A cap below what the device sustains would fix that, BUT DXVK's limiter
+# derives its pacing from the swapchain timing, which this software WSI path reports wrongly: dxgi.maxFrameRate = 40
+# measured 1.9 fps, not 40. So the cap stays off by default until the present timing is fixed - use a game's own
+# in-engine frame limiter instead. Y700_FPS_CAP=<n> re-enables the DXVK limiter to retest it.
+: "${Y700_FPS_CAP:=0}"
+_cap=
+[ "$Y700_FPS_CAP" != 0 ] && _cap="dxgi.maxFrameRate = $Y700_FPS_CAP;d3d11.maxFrameRate = $Y700_FPS_CAP;"
+export DXVK_CONFIG="dxgi.syncInterval = 0;d3d11.syncInterval = 0;${_cap}${DXVK_CONFIG}"
+
+# Steam prepends its overlay libraries to LD_PRELOAD; there is no arm64 gameoverlayrenderer.so, and the way the
+# client joins the list loses a separator, which swallowed the entry after it. Keep only paths that exist.
+clean=
+for e in $(printf '%s' "$LD_PRELOAD" | tr ': ' '\n\n'); do
+  [ -n "$e" ] && [ -e "$e" ] && clean="${clean:+$clean:}$e"
+done
+# Valve's tier0 (in steamclient.so, loaded by lsteamclient inside the game process) uses SysV semaphores, and this
+# kernel has no CONFIG_SYSVIPC: without the user-space emulation the game dies with
+#   src/tier0/threadtools.cpp (2526) : Assertion Failed: Function not implemented
+SYSV=/home/siwal/y700-steam-arm64/sysvipc/libsysvipc-emu-aarch64.so
+export LD_PRELOAD="$SYSV${clean:+:$clean}"
+echo "  LD_PRELOAD=$LD_PRELOAD" >> "$L"
+
+env | grep -E '^(STEAM_COMPAT|SteamAppId|SteamGameId|VK_|LD_LIBRARY_PATH=|DISPLAY|WAYLAND|XDG_RUNTIME)' | sed 's/^/  env /' >> "$L"
+# wine runs tabtip.exe (the Windows touch keyboard) in the prefix; through the Wayland text-input protocol it keeps
+# popping phosh's on-screen keyboard over the game. Turn the OSK off for the run and put it back afterwards.
+osk_restore() { [ -n "$osk_was" ] && gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled "$osk_was" 2>/dev/null; }
+osk_was=
+if [ "${Y700_OSK:-off}" = off ]; then
+  osk_was=$(gsettings get org.gnome.desktop.a11y.applications screen-keyboard-enabled 2>/dev/null)
+  [ -n "$osk_was" ] && gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled false 2>/dev/null
+  trap 'osk_restore' EXIT INT TERM
+fi
+"$P/proton" "$verb" "$@" >> "$L" 2>&1
+rc=$?
+osk_restore
+exit $rc

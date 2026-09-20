@@ -1,0 +1,7 @@
+"manifest"
+{
+  "version" "2"
+  "commandline" "/y700-proton-arm64-run %verb%"
+  "use_sessions" "1"
+  "compatmanager_layer_name" "proton"
+}

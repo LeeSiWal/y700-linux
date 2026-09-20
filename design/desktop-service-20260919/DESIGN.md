@@ -104,3 +104,15 @@ Later, separate: on-screen keyboard / launcher packages (apt), Steam.
   'y700-ctl resolution <pct>': TEST_ONLY first, compositor mode, old FBs freed after the first commit on the new ones,
   underruns within 6 s -> automatic revert, kept value saved. Settings app ui/y700-display.py (resolution, rotation,
   brightness). Phosh bar: show-battery-percentage + clock-show-weekday. Not yet run on the panel.
+- 2026-09-21 app grid: two Steam entries in ui/applications - "Steam" (steam-arm64.desktop, run-arm-direct.sh: Valve native
+  linuxarm64 client, CEF on turnip via -cef-use-vulkan) and "x86 Steam (FEX)" (steam.desktop, the old FEX client, renamed
+  so it sorts to the end of the grid). Do not run both at once: separate HOMEs but one /dev/shm/y700-sysv namespace.
+- 2026-09-21 xguard.py (session component, started by phosh-session.sh, logs ~/y700-agent/xguard-session.log):
+  measured that phoc keeps Xwayland windows in creation order, ignores XRaiseWindow/XLowerWindow from other clients and
+  zwlr_foreign_toplevel activate, while X routes pointer/touch by its own stacking -> the newest window of a multi-window
+  X app eats every tap even when phosh shows another one (Steam: Friends/Settings window vs the store window; an emptied
+  ShapeInput region does not fall through either, the events just vanish). The guard compares _NET_ACTIVE_WINDOW with the
+  topmost mapped toplevel, asks for a raise (phoc ignores it today, free if that changes) and after desktop.json
+  x_guard_grace (2 s) closes the window on top with WM_DELETE_WINDOW - only for WM_CLASSes in x_guard_classes
+  (default ["steam"]). desktop.json x_guard: "close" (default) | "warn" (log only) | "off". test_xguard.py 11 OK,
+  plus a live check against the real server (two managed windows of one class: only the one on top is closed).

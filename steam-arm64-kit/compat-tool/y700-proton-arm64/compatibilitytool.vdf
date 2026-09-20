@@ -1,0 +1,13 @@
+"compatibilitytools"
+{
+  "compat_tools"
+  {
+    "y700_proton_arm64"
+    {
+      "install_path" "."
+      "display_name" "Y700 Proton 11 ARM64 (no container)"
+      "from_oslist"  "windows"
+      "to_oslist"    "linux"
+    }
+  }
+}

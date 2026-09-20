@@ -2,8 +2,9 @@
 
 Research snapshot of running Ubuntu 26.04 (arm64) on the Lenovo Legion Y700 gen-4 tablet (TB323FU, Snapdragon 8
 Elite / Adreno 840) with its stock **Android GKI 6.12 kernel and vendor modules**, a touch desktop, x86 apps through
-FEX-Emu, Vulkan through turnip (KGSL), and **Steam with a native Linux game (Dead Cells) running GPU-accelerated
-(OpenGL via zink over turnip)**.
+FEX-Emu, Vulkan through turnip (KGSL), and **Steam running games**: a native Linux game (Dead Cells, OpenGL via zink
+over turnip) through the x86 client, and a **Windows x86-64 game (Deep Rock Galactic: Survivor) through Valve's
+native arm64 Steam client and ARM64 Proton** (ARM64 wine + bundled FEX + DXVK on turnip).
 
 > **Status: experimental, device-specific, not an installer.** Everything here was developed and verified on one
 > device. Paths are hard-coded (`/home/siwal/...`), several guards check values of that device, and device-specific
@@ -20,14 +21,16 @@ FEX-Emu, Vulkan through turnip (KGSL), and **Steam with a native Linux game (Dea
 | Boot | Ubuntu userspace on the stock kernel; staged bring-up service loads reviewed module bundles after boot (`design/nextboot-impl`, `bringup.py`) |
 | Display | 1904x3040@120 dual-DSI panel driven from user space: DRM owner process + two-plane presenter; live render resolution 50–100 % with plane scaling |
 | Desktop | Phosh (phoc) or labwc on a headless wlroots output, shown on the panel by `desktop-service.py` (systemd), rotation, touch calibration (uinput proxy for phoc), brightness, settings app |
-| Input | Touch (NVT), keys; on-screen keyboard; USB/Bluetooth input hot-plug (the desktop service creates `/dev/input` nodes for external devices: `/dev` is a plain tmpfs here, not devtmpfs); Razer Kishi V3 Ultra verified in Dead Cells |
+| Input | Touch (NVT), keys; on-screen keyboard; an X input guard closes a hidden second window of an X app (Steam's Friends/Settings), which otherwise swallows every tap because phoc never restacks Xwayland windows; USB/Bluetooth input hot-plug (the desktop service creates `/dev/input` nodes for external devices: `/dev` is a plain tmpfs here, not devtmpfs); Razer Kishi V3 Ultra verified in Dead Cells |
 | GPU | turnip (Mesa 26.2.3, KGSL backend, x11/wayland WSI) — native and x86 (FEX Vulkan thunk) vkcube on the panel |
 | Network | Wi-Fi (cnss/QCA), USB Ethernet; Bluetooth (custom HCI firmware loader + BlueZ) |
 | Audio | Speakers through a custom GPR/AudioReach client (`speakerd.py`) fed by a PipeWire pipe sink; apps and x86 games use PulseAudio/PipeWire as usual. No speaker protection algorithm (fixed −6 dB), no headset/mic yet |
 | Sensors / power | ADC thermals, charger limiter, suspend (freezer / device pass) experiments |
 | x86 | FEX-Emu 2609 with an Ubuntu 24.04 x86 RootFS; X11/Wayland GUI apps |
-| **Steam** | client updates, logs in, library UI renders (software); native Linux games start through the `y700_direct` compatibility tool — see `steam-kit/` |
-| **Games** | Dead Cells (x86-64, OpenGL) renders on the Adreno 840: OpenGL -> zink (x86 Mesa) -> FEX Vulkan thunk -> turnip; GPU busy ~75 %; playable with a USB gamepad (Kishi V3 Ultra) **with sound** |
+| **Steam (x86)** | client updates, logs in, library UI renders (software); native Linux games start through the `y700_direct` compatibility tool — see `steam-kit/` |
+| **Steam (arm64)** | Valve's native linuxarm64 client: login, store, library and Big Picture, CEF UI on the GPU (`-cef-use-vulkan`, ANGLE on turnip) — see `steam-arm64-kit/` |
+| **Games (Linux)** | Dead Cells (x86-64, OpenGL) renders on the Adreno 840: OpenGL -> zink (x86 Mesa) -> FEX Vulkan thunk -> turnip; GPU busy ~75 %; playable with a USB gamepad (Kishi V3 Ultra) **with sound** |
+| **Games (Windows)** | Deep Rock Galactic: Survivor (Unity 6, D3D11) through Valve's ARM64 Proton without the runtime container: 60-78 fps, GPU ~80 %, Steam API/cloud working — see `steam-arm64-kit/` |
 
 ## Steam on a kernel without user namespaces and System V IPC (`steam-kit/`)
 The GKI kernel has `CONFIG_USER_NS`, `CONFIG_PID_NS`, `CONFIG_SYSVIPC` and `CONFIG_POSIX_MQUEUE` disabled. Valve's
@@ -87,15 +90,30 @@ work there), so nothing throttles below the 125 C "hot" trip and the prime cores
 selected from the settings app; the original maxima are restored on exit. Measured with the 3.4 GHz balanced cap: 68-78 C
 instead of 86-102 C under the same load, with no throughput loss.
 
-## Windows games on ARM (research, not working yet)
-Two ARM64 Wine stacks were tried for a Windows x86-64 game (The Witcher 3): Hangover 11.16 (packaged for Ubuntu 26.04 arm64)
-and Valve's own **Proton 11.0 (ARM64)** for the Steam Frame, which can be fetched with the Steam console
-(`download_depot 4628740 4628741 <manifest>`; tools: Proton ARM64 4628740, FEX 3127680, Steam Linux Runtime 4.0 arm64 4185400).
-Both start the game, and DXVK reaches the GPU ("Adreno (TM) 840 (turnip)", 1520x952 swapchain), but the game then idles at
-~7 % CPU waiting for the Steam API: ARM64 `lsteamclient` needs an arm64 `steamclient.so` and the client here is x86-64 under
-FEX. Running the *Windows* Steam client inside the prefix gets as far as the login window; its CEF web helper does not run.
-Plain x86 Wine under FEX is a dead end: 32-bit WOW64 fails ("could not load kernel32") and GUI apps hang after winex11.drv
-initialises. Scripts: `design/thermal-20260920/` for the caps used during the tests; notes in the memory of this work.
+## Windows games on ARM (`steam-arm64-kit/`)
+Valve's **native linuxarm64 Steam client** and **Proton 11.0 (ARM64)** (the Steam Frame stack) both run here, and a
+Windows x86-64 game plays at 60-78 fps. The client is fetched from Valve's client-update CDN (sha256-verified, not
+redistributed); Proton ARM64 and its tools come from the Steam console (`download_depot 4628740 4628741 <manifest>`;
+Proton ARM64 4628740, FEX 3127680, Steam Linux Runtime 4.0 arm64 4185400 — the runtime container itself is unusable
+without user namespaces, so the compatibility tool drops `require_tool_appid` and calls Proton's own `proton` script).
+
+What it took, beyond the container:
+- `lsof` — the client validates each WebUI socket with it; without it every connection is rejected and the UI never
+  appears ("Steamwebhelper is not responding").
+- `~/.steam/sdkarm64` — holds `steam-launch-wrapper` (a game launch dies instantly without it) and the **native
+  aarch64 `steamclient.so`**, which is what finally let ARM64 `lsteamclient` talk to the client. With the x86-64 one,
+  games start and idle forever in the Steam API — the wall this hit in the previous snapshot.
+- `sysvipc-emu` preloaded into the game — Valve's tier0 asserts `threadtools.cpp (2526): Function not implemented`
+  without System V semaphores; Steam's own `LD_PRELOAD` handling drops the entry, so the tool rebuilds the list.
+- FEX tuning: with Valve's defaults the engine ran single-threaded at 100 % CPU with the GPU idle (2-6 fps) and the
+  wine log full of `Handled unaligned atomic` traps. `STEAM_FEX_TSOENABLED=0` + `STEAM_FEX_MULTIBLOCK=1` gives
+  60-78 fps with the GPU at ~80 % (weaker memory ordering: revertible per game).
+- Presentation: FIFO/vsync presents fall back to a ~1 s timer on this software WSI path (0.8 fps, with the game's
+  loading gated on it), and DXVK's own frame limiter inherits the same bad timing (`maxFrameRate = 40` measured
+  1.9 fps). The tool runs with `dxgi.syncInterval = 0` and leaves pacing to the panel presenter.
+
+The x86 (FEX) client and the arm64 client must never run at the same time: separate `HOME`s, but one emulated System V
+namespace, and a game's `lsteamclient` will connect to the wrong client's IPC port and hang.
 
 ## Layout
 - `design/nextboot-impl/` — bring-up orchestrator, bundle builder/loader, guards (bootguard, registry), DRM helpers
@@ -105,6 +123,7 @@ initialises. Scripts: `design/thermal-20260920/` for the caps used during the te
 - `design/*-20260919/` — per-subsystem notes and tools (display, touch, wifi, bt, audio, sensors, power, suspend, ...)
 - `design/bootfix-20260919/` — systemd units and drop-ins (bring-up service, dbus, Wi-Fi naming, upower without userns)
 - `steam-kit/` — Steam launcher wrapper, fake bwrap, container-less runtime entry point, sysvipc-emu sources/tests
+- `steam-arm64-kit/` — native arm64 Steam client launcher, ARM64 Proton compatibility tool, client stand-ins (`lsof`, `xz`)
 - `MANIFEST.sha256` — checksums of every file in this snapshot
 
 ## Not included (do not redistribute; extract from your own device / obtain from the vendor)

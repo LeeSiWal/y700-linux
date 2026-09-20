@@ -18,4 +18,8 @@ i=0; while [ ! -S "$XDG_RUNTIME_DIR/pipewire-0" ] && [ $i -lt 50 ]; do sleep 0.1
 wireplumber >> "$AUDIOLOG" 2>&1 &
 pipewire-pulse >> "$AUDIOLOG" 2>&1 &
 pipewire -c /home/siwal/y700-design/desktop-service-20260919/audio/y700-speaker.conf >> "$AUDIOLOG" 2>&1 &
+# X input guard: phoc keeps Xwayland windows in creation order and ignores external restack requests, so a second
+# window of an X app (Steam's Friends/Settings) swallows all pointer and touch input while phosh shows another one
+XGUARDLOG=/home/siwal/y700-agent/xguard-session.log
+DISPLAY=:0 python3 -B /home/siwal/y700-design/desktop-service-20260919/xguard.py >> "$XGUARDLOG" 2>&1 &
 exec /usr/libexec/phosh --unlocked

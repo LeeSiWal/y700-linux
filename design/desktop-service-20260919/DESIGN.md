@@ -142,3 +142,11 @@ Later, separate: on-screen keyboard / launcher packages (apt), Steam.
   While the panel is off a bring-up stage would refuse to run (its display guard checks the planes) - fine after boot.
   Not done yet (user deferred): an idle timer, and a hardware button - gpio-keys only reports KEY_VOLUMEUP here, the
   power button hangs off the PMIC and no PON input driver exists in the 229 vendor modules the bundles know.
+- 2026-09-21 wake source for display sleep: NOT the touchscreen. The NVT driver has a supplier link to
+  9800000.qcom,mdss_mdp and subscribes to the panel notifier, so when the CRTC goes off it runs nvt_ts_suspend and
+  nvt_irq_enable(0) - no touch events at all, and this driver exposes no wake-gesture knob (/proc/NVTSPI and friends
+  are diagnostics only). The service therefore watches the devices that stay alive while the panel is off: gpio-keys
+  (this device reports only KEY_VOLUMEUP) and any external pad or keyboard it created a node for; any event there
+  wakes the screen. Verified: sleep 06:51:12 -> volume up -> wake 06:51:18. For touch-to-wake instead, set
+  desktop.json sleep_display_off=false: the backlight goes off but the panel keeps scanning out, so it saves ~1.1 W
+  of the 2.6 W.

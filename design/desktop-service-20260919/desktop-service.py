@@ -4,7 +4,7 @@ labwc (siwal) on a HEADLESS output, shown on the panel by a two-plane presenter 
 owner's DRM file (pidfd_getfd; no new DRM master, the owner keeps its fd). See DESIGN.md.
 Exit codes: 0 stopped by SIGTERM/SIGINT (native layout restored); 1 error (systemd restarts); 3 precondition not met
 (bring-up not finished, unknown screen state) -> no restart."""
-import collections, ctypes, fcntl, importlib.util, json, os, signal, stat, struct, subprocess, sys, time
+import collections, ctypes, fcntl, importlib.util, json, os, select, signal, stat, struct, subprocess, sys, time
 from pathlib import Path
 HERE = Path(__file__).resolve().parent; DESK = Path('/home/siwal/y700-design/desktop-20260919'); IMPL = Path('/home/siwal/y700-design/nextboot-impl')
 sys.path.insert(0, str(IMPL)); sys.path.insert(0, str(DESK))
@@ -509,7 +509,7 @@ def main():
     try:
         pct0, rw0, rh0 = resolution_config()
         S = {'fbs': alloc(rw0, rh0), 'w': rw0, 'h': rh0, 'pct': pct0, 'old': None, 'first': True, 'watch': None,
-             'asleep': False, 'panel_off': False, 'bl': None}
+             'asleep': False, 'panel_off': False, 'bl': None, 'wakefds': []}
         wake = {'req': False}                  # set from the touch proxy thread (single assignment, no lock needed)
         shim = dr.Shim(reg); shim.device_fd_orig = shim.device_fd
         shim.device_fd = lambda p: (_ for _ in ()).throw(PermissionError(p)) if p.startswith('/dev/dri/') else shim.device_fd_orig(p)
@@ -600,6 +600,21 @@ def main():
             prev = S['pct']; S.update(old=S['fbs'], fbs=new, w=nw, h=nh, pct=pct, first=True,
                                       watch=(time.monotonic() + 6, rg.underruns(c, reg['encoder_status']), prev, reason))
             log('RESOLUTION', prev, '->', pct, '%dx%d' % (nw, nh), 'scale %.3f' % (nw / LOGICAL_W), reason); return 'ok %d' % pct
+        def wake_sources():
+            """Devices that still deliver input while the panel is off. The touchscreen is not one of them: the NVT
+            driver subscribes to the panel notifier (supplier link to 9800000.qcom,mdss_mdp) and suspends with the
+            display, IRQ included - so the volume key and any external pad/keyboard are what can wake the screen."""
+            out = []
+            for d in sorted(Path('/sys/class/input').glob('event*')):
+                node = Path('/dev/input')/d.name
+                if not node.exists(): continue
+                try: name = (d/'device/name').read_text().strip()
+                except OSError: continue
+                if name == 'gpio-keys' or node in getattr(inodes, 'made', {}):
+                    try: out.append((name, os.open(str(node), os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)))
+                    except OSError as e: log('SLEEP cannot watch', node, repr(e))
+            return out
+
         def set_sleep(on):
             """Display sleep. The backlight is the obvious part (measured: 4.1 W -> 3.0 W at this brightness), but the
             panel keeps scanning out at 120 Hz, so with sleep_display_off the planes are detached and the CRTC is
@@ -615,7 +630,8 @@ def main():
                         k.atomic(fd, k.ATOMIC_TEST_ONLY | k.ATOMIC_ALLOW_MODESET, objs, props)
                         k.atomic(fd, k.ATOMIC_ALLOW_MODESET, objs, props); S['panel_off'] = True
                     except OSError as e: log('SLEEP panel off refused, backlight only:', repr(e))
-                log('SLEEP on panel_off=%s bl=%s' % (S['panel_off'], S['bl']))
+                S['wakefds'] = wake_sources()
+                log('SLEEP on panel_off=%s bl=%s wake on %s' % (S['panel_off'], S['bl'], [n for n, _ in S['wakefds']] or 'ctl only'))
             else:
                 if S['panel_off']:
                     d = S['fbs'][0]
@@ -624,6 +640,10 @@ def main():
                     k.atomic(fd, k.ATOMIC_TEST_ONLY | k.ATOMIC_ALLOW_MODESET, objs, props)
                     k.atomic(fd, k.ATOMIC_ALLOW_MODESET, objs, props); S['panel_off'] = False
                 if S['bl']: (BACKLIGHT/'brightness').write_text('%d' % S['bl'])
+                for _, f in S.get('wakefds', []):
+                    try: os.close(f)
+                    except OSError: pass
+                S['wakefds'] = []
                 S['asleep'] = False; S['first'] = True            # next capture is a full frame, with a TEST commit
                 log('SLEEP off')
             return 'ok %s' % ('asleep' if on else 'awake')
@@ -667,7 +687,16 @@ def main():
                 if S['asleep']:
                     try: set_sleep(False)
                     except OSError as e: log('WAKE failed', repr(e))
-            if S['asleep']: time.sleep(0.2); continue                         # no capture, no flips while the panel sleeps
+            if S['asleep']:
+                fds = [f for _, f in S.get('wakefds', [])]
+                ready = select.select(fds, [], [], 0.2)[0] if fds else (time.sleep(0.2) or [])
+                for f in ready:
+                    try: os.read(f, 4096)                                    # drain; any event means "wake up"
+                    except OSError: pass
+                if ready:
+                    try: set_sleep(False)
+                    except OSError as e: log('WAKE failed', repr(e))
+                continue                                                     # no capture, no flips while asleep
             zc['target'] = S['fbs'][back]                                    # where the compositor should paint next
             try: buf, info = cap.capture(damage=not S['first'], timeout=0.25)
             except TimeoutError: buf = None

@@ -72,3 +72,30 @@
 - y700-bringup.service started 19:12:08 (boot +1 min) -> pstore, display (4m44s), owner (colour bars seen by the user,
   19:18:34), governor, gpu, keeper, touch, adc, wifi-a, wifi-b, nmcli up y700-wifi -> BRINGUP done 19:30:16 (18 min).
   No human input. dbus/NM active again (2nd boot in a row). Wi-Fi names kept (wlan0 .86, wifi-aware0, p2p0).
+
+## Reboot verification 2026-09-21 (boot 85424e1c)
+First boot that actually exercised the installed units (`--upto audio-c --wifi`). It found five bugs; all are fixed
+here, and `verify-boot.py` checks a boot in one go (units, stages, /dev nodes, network, hci0, sound card, speaker
+fifo, presenter, compositor, input guard).
+
+1. `make-boot-bundle.py` used `MGMT_NET` before defining it, so every Wi-Fi stage died while building its bundle.
+2. **`KillMode=process` on y700-bringup.service.** A failed stage made systemd clean the unit cgroup, which killed the
+   display owner and the GPU keeper - the two processes that must live for the whole boot - so the desktop could not
+   start and every later stage refused with "registered process gone/changed". Verified afterwards: wifi-b failed and
+   the desktop kept running.
+3. `desktop-service.py` waits for the `touch` stage as well when the touch proxy is on. It used to wait only for
+   owner+gpu and started 2.5 min before the touchscreen existed ("touch identity changed").
+4. `touchproxy.py` resolves the touchscreen by name and creates `/dev/input/eventN` from sysfs: `/dev` is a plain
+   tmpfs, so on a fresh boot there is no input node at all, and the event numbers move between boots.
+5. `load-stage.py` tolerates a management-link flap for `MGMT_FLAP_S` (30 s). wifi-b loads the USB gateway modules
+   (usb_f_gsi, gsim, rmnet_mem, ipam); the USB LAN adapter re-enumerates and its carrier drops for a moment, which the
+   guard read as losing the management path and aborted the stage.
+
+`bringup.py` also gained `--from <stage>`: continue at a stage after a human dealt with an earlier one by hand (a
+failed bundle is never retried automatically). Nothing is rewritten - the earlier stage keeps its failed record and
+the run logs that the operator vouched for what came before.
+
+Stage timings of that boot (the target of the pending speed work): display 263 s, owner 75, gpu 124, keeper 82,
+touch 81, adc 90, wifi-a 198, wifi-b 133, bt-a 200, bt-b 72, btkeeper 85, qrtr-smd 51, adsp 114, audio-c1 143,
+audio-c 223. Roughly 855 s of that is fixed observation windows in `load-stage.py` (15 s baseline per stage, display
+130 s, six stages at 60 s, ...), not module loading.

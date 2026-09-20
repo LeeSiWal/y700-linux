@@ -34,6 +34,9 @@ def drm_state():
     p = Path('/sys/kernel/debug/dri/0/state')
     return c.read(p) if p.exists() else None
 
+MGMT_FLAP_S = 30           # how long the management link may be down before the stage is aborted
+_flap = {'since': None}    # when it went down (None = up)
+
 def preflight(m, mon):
     for name, digest in m['files'].items():
         need(Path(name).name == name and hashlib.sha256(c.read(B/name, True)).hexdigest() == digest, 'bundle changed: ' + name)
@@ -234,7 +237,20 @@ def main():
                 if 'wifi' in m or 'bt' in m or 'qrtr' in m or 'audio' in m or 'frpc' in m or 'adc' in m:
                     net = (m.get('wifi') or m.get('bt') or m.get('qrtr') or m.get('audio') or m.get('frpc') or m.get('adc'))['net']
                     n = net and Path('/sys/class/net')/net
-                    need(not n or c.read(n/'carrier').strip() == '1' and c.read(n/'operstate').strip() == 'up', 'management link changed')
+                    # The point of this check is not losing the path this session is on, and a link that comes back on
+                    # its own has not been lost: wifi-b loads the USB gateway modules (usb_f_gsi, gsim, rmnet_mem,
+                    # ipam), which re-enumerates the USB LAN adapter and drops its carrier for a moment (boot 85424e1c
+                    # stopped there). A drop is now tolerated for MGMT_FLAP_S while it recovers, and reported.
+                    up = not n or (c.read(n/'carrier').strip() == '1' and c.read(n/'operstate').strip() == 'up')
+                    if up:
+                        if _flap['since'] is not None:
+                            print('management link %s recovered after %.1f s' % (net, time.monotonic() - _flap['since']), flush=True)
+                            _flap['since'] = None
+                    else:
+                        if _flap['since'] is None:
+                            _flap['since'] = time.monotonic()
+                            print('management link %s is down; waiting up to %d s for it' % (net, MGMT_FLAP_S), flush=True)
+                        need(time.monotonic() - _flap['since'] < MGMT_FLAP_S, 'management link changed')
             display_extra(); mon.extra = display_extra; drm_before = None   # exact native state is checked every tick instead
         print('Observing baseline for 15 seconds.', flush=True); mon.observe(15, quiet=True)
         report = {'boot_id': m['boot_id'], 'stage': m['stage'], 'loads': [], 'dmesg_before': c.dmesg(), 'clocks_before': c.clocks(),

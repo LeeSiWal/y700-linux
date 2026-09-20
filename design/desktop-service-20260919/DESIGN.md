@@ -129,3 +129,7 @@ Later, separate: on-screen keyboard / launcher packages (apt), Steam.
   Measured while playing: presenter 53.5 fps, copy_ms_avg 0.01, underruns 0 (before: 3-22 fps, copy 0.5-1.3 ms).
 - 2026-09-21 the x86 Steam launcher is hidden from the app grid (NoDisplay): its library is separate from the arm64
   client, so a game installed there shows as "not installed" and a tap re-downloads it into the wrong library.
+- 2026-09-21 boot 85424e1c: the service started 2.5 min before the touch stage (it waited only for owner+gpu) and
+  died on "touch identity changed"; it now waits for the touch stage too when the touch proxy is on. touchproxy also
+  resolves the touchscreen by NAME and creates /dev/input/eventN from sysfs - /dev is a plain tmpfs, so on a fresh
+  boot no input node exists and the event numbers move between boots.

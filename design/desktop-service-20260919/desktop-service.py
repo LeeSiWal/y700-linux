@@ -20,7 +20,7 @@ EXIT_PRECONDITION = 3
 class Precondition(Exception): pass
 
 # ---------- pure decision helpers (unit-tested in test_desktop_service.py) ----------
-def bringup_ready(doc, boot_id, need=('owner', 'gpu')):
+def bringup_ready(doc, boot_id, need=('owner', 'gpu')):   # the caller adds 'touch' when the touch proxy is on
     """True when bringup-<boot8>.json of THIS boot has an ok step for every stage in need."""
     if not doc or doc.get('boot_id') != boot_id: return False
     ok = {s['stage'] for r in doc.get('runs', []) for s in r.get('steps', []) if s.get('result') == 'ok'}
@@ -272,14 +272,17 @@ def remove_fbs(fd, fbs, handles, errors):
         try: fcntl.ioctl(fd, DESTROY_DUMB, struct.pack('<I', h))
         except OSError as e: errors.append('DESTROY_DUMB %d: %r' % (h, e))
 
-def wait_bringup(boot):
+def wait_bringup(boot, need=('owner', 'gpu')):
+    """'touch' belongs in need when the touch proxy is on: the touch stage runs after gpu, and starting before it
+    leaves the proxy with no touchscreen to open (seen on boot 4f44e566: the service started 2.5 min too early)."""
     p = AGENT/('bringup-%s.json' % boot[:8]); t0 = time.monotonic(); said = False
     while True:
         try: doc = json.loads(p.read_text())
         except (OSError, ValueError): doc = None
-        if bringup_ready(doc, boot): return
-        if time.monotonic() - t0 > BRINGUP_WAIT_S: raise Precondition('bring-up owner+gpu not ok after %d s (%s)' % (BRINGUP_WAIT_S, p))
-        if not said: log('WAIT bring-up owner+gpu (%s)' % p.name); said = True
+        if bringup_ready(doc, boot, need): return
+        if time.monotonic() - t0 > BRINGUP_WAIT_S:
+            raise Precondition('bring-up %s not ok after %d s (%s)' % ('+'.join(need), BRINGUP_WAIT_S, p))
+        if not said: log('WAIT bring-up %s (%s)' % ('+'.join(need), p.name)); said = True
         time.sleep(5)
 
 def prepare_gpu_node():
@@ -424,7 +427,8 @@ def main():
     try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError: raise Precondition('another desktop presenter holds the lock')
     boot = c.read('/proc/sys/kernel/random/boot_id').strip(); open_logs(boot); log('START pid', os.getpid())
-    wait_bringup(boot)
+    need = ('owner', 'gpu') + (('touch',) if desktop_conf().get('touch_proxy', shell_config() == 'phosh') else ())
+    wait_bringup(boot, need)
     reg, _ = rg.load(c, boot)
     prepare_gpu_node()
     recover(reg, boot)
@@ -495,7 +499,7 @@ def main():
             import touchproxy
             toff = touch_offset(rot0, shell0)
             tproxy = touchproxy.TouchProxy(matrix=touch_matrix(rot0, toff), log=log); log('TOUCH offset', toff)
-            dr.INPUTS.pop('/dev/input/event1', None); dr.INPUTS[tproxy.path] = touchproxy.NAME
+            dr.INPUTS.pop(tproxy.src_path, None); dr.INPUTS[tproxy.path] = touchproxy.NAME
         env = {'PATH': '/usr/bin:/bin', 'HOME': '/home/siwal', 'USER': 'siwal', 'XDG_RUNTIME_DIR': str(RUN), 'LIBSEAT_BACKEND': 'seatd',
                'SEATD_SOCK': str(dr.SOCK), 'LANG': 'C.UTF-8', 'WLR_BACKENDS': 'headless,libinput', 'WLR_RENDERER': 'pixman',
                'WLR_LIBINPUT_NO_DEVICES': '1'}

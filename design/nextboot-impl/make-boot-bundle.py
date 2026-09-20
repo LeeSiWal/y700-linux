@@ -169,6 +169,14 @@ m = {'stage': stage, 'boot_id': rd('/proc/sys/kernel/random/boot_id').strip(), '
      'load_order': ORDER[stage], 'requires_live': REQUIRES[stage], 'bind_after': BIND_AFTER[stage], 'bind_now': BIND_NOW[stage],
      'templates_sha256': sha(HERE/'review-templates.json'), 'ramoops_required': stage != 'pstore'}
 need(m['root'] == rd('/sys/class/block/mmcblk1p3/dev').strip(), 'root is not mmcblk1p3')
+
+def _mgmt_net():
+    for n in ('enx<MAC>', 'wlan0'):
+        try:
+            if (Path('/sys/class/net')/n/'carrier').read_text().strip() == '1': return n
+        except OSError: pass
+    return None                                        # no management link at all (boot with a pad instead of LAN): check skipped
+MGMT_NET = _mgmt_net()                             # defined before the first stage block that uses it (wifi-a/b)
 if stage == 'keeper':
     m['gpu'] = {'firmware': FIRMWARE}
 if stage in ('wifi-a', 'wifi-b'):
@@ -189,13 +197,6 @@ if stage in ('wifi-a', 'wifi-b'):
         m['wifi']['calibration_done'] = _cal[-1] if _cal else None
 # Management link watched by the adc/wifi/bt/qrtr-smd/adsp/audio stages: the USB Ethernet adapter when it has carrier, else Wi-Fi
 # (2026-09-20: the side USB-C port is used by a gamepad; one USB controller serves both ports, so LAN and pad exclude each other)
-def _mgmt_net():
-    for n in ('enx<MAC>', 'wlan0'):
-        try:
-            if (Path('/sys/class/net')/n/'carrier').read_text().strip() == '1': return n
-        except OSError: pass
-    return None                                        # no management link at all (boot with a pad instead of LAN): check skipped
-MGMT_NET = _mgmt_net()
 BTFW = Path('/home/siwal/y700-design/bt-20260919/firmware')
 AUDFW = Path('/home/siwal/y700-design/audio-20260919/firmware')
 if stage == 'adsp':

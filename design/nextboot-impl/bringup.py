@@ -83,6 +83,14 @@ def main(argv):
     if os.geteuid() != 0 and not dry: sys.exit('run as root (systemd service or sudo)')
     r = Run(dry); r.log('BRINGUP start boot=%s upto=%s dry=%s' % (r.boot[:8], upto, dry))
     todo = names[:names.index(upto) + 1]
+    # --from <stage>: continue at that stage after a human dealt with an earlier one by hand (a failed bundle is never
+    # retried automatically, by design). Nothing is rewritten: the earlier stage keeps its failed record, and this run
+    # says in the log that the operator vouched for what came before.
+    if '--from' in argv:
+        start = argv[argv.index('--from') + 1]
+        if start not in names: sys.exit('unknown stage ' + start)
+        todo = [s for s in todo if names.index(s) >= names.index(start)]
+        r.log('START AT %s (operator override: earlier stages are not checked by this run)' % start)
     # wifi-connect runs only with --wifi (it now sits before the BT stages in STAGES)
     if 'wifi-connect' in todo and '--wifi' not in argv and upto != 'wifi-connect': todo.remove('wifi-connect')
     if '--wifi' in argv and names.index(upto) >= names.index('wifi-b') and 'wifi-connect' not in todo: todo.append('wifi-connect')

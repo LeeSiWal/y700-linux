@@ -7,6 +7,10 @@ ConditionPathExists=!/home/siwal/y700-agent/bringup.disable
 RefuseManualStop=yes
 
 [Service]
+# ... and so would a FAILED stage: systemd cleans the unit's cgroup, which on boot 4f44e566 took the display owner
+# and the GPU keeper with it, so the desktop could not start and every later stage refused ("registered process
+# gone/changed"). With KillMode=process only bringup.py itself is killed and the retained workers survive a failure.
+KillMode=process
 Type=exec
 RemainAfterExit=yes
 ExecStart=/usr/bin/python3 -B /home/siwal/y700-design/nextboot-impl/bringup.py --upto audio-c --wifi

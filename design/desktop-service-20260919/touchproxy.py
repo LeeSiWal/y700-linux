@@ -60,9 +60,30 @@ class Rotator:
         return out
 
 class TouchProxy:
-    def __init__(self, src='/dev/input/event1', src_name='NVTCapacitiveTouchScreen', matrix='1 0 0 0 1 0', log=print):
-        self.log = log; n = src.rsplit('/', 1)[1]
+    @staticmethod
+    def find(src_name='NVTCapacitiveTouchScreen'):
+        """the event number is not stable across boots (it depends on the order the drivers registered), so the
+        touchscreen is looked up by its device name. /dev here is a plain tmpfs with no devtmpfs or udev, so the node
+        usually does not exist yet and is created from the numbers sysfs reports (same as /dev/uinput below)."""
+        hits = []
+        for d in sorted(Path('/sys/class/input').glob('event*')):
+            try: name = (d/'device/name').read_text().strip()
+            except OSError: continue
+            if name == src_name: hits.append(d)
+        if len(hits) != 1: raise RuntimeError('touchscreen %r: %d input devices %r' % (src_name, len(hits), [h.name for h in hits]))
+        d = hits[0]; node = Path('/dev/input')/d.name
+        if not node.exists():
+            ma, mi = (int(x) for x in (d/'dev').read_text().strip().split(':'))
+            node.parent.mkdir(parents=True, exist_ok=True)
+            os.mknod(node, 0o600 | stat.S_IFCHR, os.makedev(ma, mi))
+        return str(node)
+
+    def __init__(self, src=None, src_name='NVTCapacitiveTouchScreen', matrix='1 0 0 0 1 0', log=print):
+        self.log = log
+        if src is None: src = self.find(src_name); log('TOUCH source', src)
+        n = src.rsplit('/', 1)[1]
         if Path('/sys/class/input/%s/device/name' % n).read_text().strip() != src_name: raise RuntimeError('touch identity changed: ' + src)
+        self.src_path = src
         self.src = os.open(src, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
         info = {}
         for a in ABS_CODES:

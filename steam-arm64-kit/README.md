@@ -19,6 +19,7 @@ Verified 2026-09-21 on boot `684daae1`: client logs in, store/library/Big Pictur
 | `run-arm-direct.sh` | starts the native arm64 client directly (see *Why not steam.sh* below) |
 | `run-arm-steam.sh` | the earlier route through Valve's `steam.sh`, kept for reference |
 | `run-drgs.sh` | starts one game by hand with the environment the client would pass - for debugging without the UI |
+| `steam-quit.sh` | app-grid entry *Steam 종료*: ends the running game's wine session, then the client (there is no tray here, and the client's own Exit is unreachable while a game holds the screen) |
 | `compat-tool/y700-proton-arm64/` | Steam compatibility tool: Valve's ARM64 Proton, without the container |
 | `bin/` | stand-ins the client shells out to: `lsof`, `xz`, `arm64-exec` |
 | `sysvipc/` | the aarch64 build of the System V IPC emulation (source shared with `steam-kit/sysvipc`) |
@@ -39,6 +40,15 @@ snapshot: the x86 install in `~/.local/share/Steam` stays untouched, and the two
    `sdkarm64/steam-launch-wrapper`; if the link is missing the launch dies instantly with no message. That directory
    also holds the **native aarch64 `steamclient.so`**, which is what lets ARM64 Proton's `lsteamclient` talk to the
    client - with the x86-64 one, games start and then idle forever in the Steam API.
+
+### Client launch flags and environment
+
+| Setting | Why |
+|---|---|
+| `-cef-use-vulkan` | without it CEF renders the UI on llvmpipe (see below) |
+| `-cef-disable-hang-timeouts` | while a game saturates the CPU the web helper misses the client's heartbeat, so the client kills and restarts it (`Restart webhelper process`) and the whole UI blanks for several seconds |
+| `SDL_JOYSTICK_DISABLE_UDEV=1` | `/dev` is a plain tmpfs and the desktop service creates the input nodes itself, so udev knows nothing about the gamepad. With udev discovery on, the client sees no controller at all: Big Picture loads `basicui_neptune.vdf` ("no controller") and the pad cannot drive the UI, while games that read evdev directly still work. Without it the client registers the pad and Big Picture switches to `basicui_gamepad.vdf`. |
+| single-instance guard | both launchers refuse to start while the other client runs (see *Gotchas*) |
 
 ## Why not `steam.sh`
 
@@ -73,7 +83,14 @@ What the wrapper adds on top of the environment Steam passes:
 
 - **Never run the x86 (FEX) client at the same time.** They have separate `HOME`s but share the emulated System V
   namespace in `/dev/shm/y700-sysv`, and a game's `lsteamclient` will happily connect to the wrong client's IPC port
-  and then wait forever.
+  and then wait forever. Both launchers now check for the other client and refuse with a desktop notification.
+- **Big Picture is CPU-bound in the frame path, not in rendering.** Chromium reports `gpu_compositing: enabled`,
+  `rasterization: enabled`, `vulkan: enabled_on` - the UI really is drawn by the Adreno through ANGLE. What costs the
+  CPU is moving the result: this device has no dma-buf heaps (`/dev/dma_heap` and `/dev/ion` are both absent), so every
+  buffer format is *Software only* and each frame is copied through shared memory instead of being shared as a
+  dma-buf - then again by Xwayland's software WSI, by phoc, and by the panel presenter. Measured in Big Picture: the
+  browser process at ~170 % CPU with the GPU at 5 % and 160 MHz, while the desktop UI costs ~9 %. The copies scale
+  with the rendered area, so lowering the desktop render resolution is the lever that actually helps.
 - The app grid has two entries (`design/desktop-service-20260919/ui/applications/`): *Steam* (this one) and
   *x86 Steam (FEX)*.
 - A second client window (Friends, Settings) steals all pointer and touch input from the visible one, because phoc

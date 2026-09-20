@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Steam 종료
+Comment=Stop the running game and the Steam client (no tray here, and the client's own Exit is unreachable while a game is on screen)
+Exec=/home/siwal/y700-steam-arm64/steam-quit.sh
+Icon=application-exit
+Categories=Game;
+X-Purism-FormFactor=Workstation;Mobile;
+Terminal=false

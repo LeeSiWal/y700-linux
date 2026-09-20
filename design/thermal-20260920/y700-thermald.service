@@ -1,0 +1,16 @@
+[Unit]
+Description=Y700 user-space thermal control (CPU/GPU frequency caps by temperature; the kernel has no bound cooling devices)
+Documentation=file:/home/siwal/y700-design/thermal-20260920/README.md
+ConditionPathExists=!/home/siwal/y700-agent/thermald.disable
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 -B /home/siwal/y700-design/thermal-20260920/thermald.py
+# SIGTERM: restores the original maximum frequencies before exiting
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

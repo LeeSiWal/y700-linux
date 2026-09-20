@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Y700 display settings (GTK4/libadwaita): render resolution, rotation, brightness. Talks to y700-desktop.service over
+"""Y700 display settings (GTK4/libadwaita): render resolution, rotation, brightness, thermal profile (y700-thermald). Talks to y700-desktop.service over
 /run/y700-desktop/ctl.sock (the same requests as y700-ctl); the service validates every value."""
-import socket, sys
+import json, os, socket, sys
 import gi
 gi.require_version('Gtk', '4.0'); gi.require_version('Adw', '1')
 from gi.repository import Adw, GLib, Gtk
@@ -10,6 +10,11 @@ SOCK = '/run/y700-desktop/ctl.sock'
 RESOLUTIONS = [(100, '100% · 1904×3040', '가장 선명 · 발열/전력 가장 큼'), (90, '90% · 1712×2736', ''),
                (80, '80% · 1524×2432', '권장 균형'), (67, '67% · 1276×2036', ''), (50, '50% · 952×1520', '발열/전력 가장 적음')]
 ROTATIONS = [(270, '가로'), (90, '가로 (반대)'), (0, '세로')]
+THERMAL = '/home/siwal/y700-design/thermal-20260920/thermal.json'          # read by y700-thermald (root) every second
+THERMAL_STATUS = '/run/y700-thermal/status.json'
+PROFILES = [('quiet', '저발열', '프라임 코어 2.7 GHz · GPU 726 MHz · 목표 75°C'),
+            ('balanced', '균형 (기본)', '프라임 코어 3.4 GHz · GPU 1050 MHz · 목표 85°C'),
+            ('performance', '성능', '최대 클럭 · 목표 95°C · 발열 큼')]
 
 def ctl(req):
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.settimeout(8)
@@ -56,7 +61,35 @@ class Window(Adw.ApplicationWindow):
         self.bl_pending = None; sc.connect('value-changed', self.on_bl)
         row = Adw.ActionRow(title='화면 밝기'); row.add_suffix(sc); g3.add(row)
 
+        g4 = Adw.PreferencesGroup(title='발열 관리', description=self.thermal_status()); page.add(g4); self.g4 = g4
+        try: cur_p = json.load(open(THERMAL)).get('profile', 'balanced')
+        except (OSError, ValueError): cur_p = 'balanced'
+        first = None
+        for key, title, sub in PROFILES:
+            row = Adw.ActionRow(title=title, subtitle=sub); b = Gtk.CheckButton(); b.set_valign(Gtk.Align.CENTER)
+            if first: b.set_group(first)
+            else: first = b
+            b.set_active(key == cur_p); b.connect('toggled', self.on_profile, key)
+            row.add_prefix(b); row.set_activatable_widget(b); g4.add(row)
+        GLib.timeout_add_seconds(5, self.refresh_thermal)
+
     def say(self, text): self.toast.add_toast(Adw.Toast(title=text, timeout=3))
+
+    def thermal_status(self):
+        try: st = json.load(open(THERMAL_STATUS)); d = st['domains']
+        except (OSError, ValueError, KeyError): return 'y700-thermald 상태를 읽을 수 없습니다 (서비스가 꺼져 있을 수 있음)'
+        f = lambda k, unit, div: '%s %.0f°C · %.1f %s' % ({'prime': 'CPU(프라임)', 'eff': 'CPU(효율)', 'gpu': 'GPU'}[k], d[k]['temp_c'], d[k]['cap'] / div, unit) if k in d else ''
+        return ' / '.join(x for x in (f('prime', 'GHz', 1e6), f('eff', 'GHz', 1e6), f('gpu', 'GHz', 1e3)) if x) + \
+               (' / 배터리 %.1f°C' % st['battery_c'] if st.get('battery_c') is not None else '')
+    def refresh_thermal(self):
+        self.g4.set_description(self.thermal_status()); return True
+    def on_profile(self, b, key):
+        if not b.get_active(): return
+        tmp = THERMAL + '.tmp'
+        try:
+            with open(tmp, 'w') as f: json.dump({'profile': key}, f)
+            os.replace(tmp, THERMAL); self.say('발열 관리: %s 적용 (1초 안에 반영)' % dict((k, t) for k, t, _ in PROFILES)[key])
+        except OSError as e: self.say('저장 실패: %s' % e)
 
     def on_res(self, b, pct):
         if not b.get_active() or self.busy: return

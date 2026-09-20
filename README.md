@@ -79,6 +79,24 @@ live presenter process of this boot/owner, desktop planes showing only its frame
 connectors and positions unchanged), and underruns are counted from each stage's start. Stages watch the management link
 (USB Ethernet, else Wi-Fi, else none). `y700-speakerd.service` waits for the audio stages.
 
+## Thermal control (`design/thermal-20260920/`)
+The kernel's CPU thermal zones have passive trips but no cooling device bound (Android's vendor thermal-engine does that
+work there), so nothing throttles below the 125 C "hot" trip and the prime cores go 66 -> 100 C in two seconds at 4.6 GHz.
+`thermald.py` (systemd unit included) reads the hottest zone per domain every second and moves that domain's frequency cap
+(`policy0`/`policy6` `scaling_max_freq`, `kgsl-3d0/max_clock_mhz`) one step at a time, with profiles quiet/balanced/performance
+selected from the settings app; the original maxima are restored on exit. Measured with the 3.4 GHz balanced cap: 68-78 C
+instead of 86-102 C under the same load, with no throughput loss.
+
+## Windows games on ARM (research, not working yet)
+Two ARM64 Wine stacks were tried for a Windows x86-64 game (The Witcher 3): Hangover 11.16 (packaged for Ubuntu 26.04 arm64)
+and Valve's own **Proton 11.0 (ARM64)** for the Steam Frame, which can be fetched with the Steam console
+(`download_depot 4628740 4628741 <manifest>`; tools: Proton ARM64 4628740, FEX 3127680, Steam Linux Runtime 4.0 arm64 4185400).
+Both start the game, and DXVK reaches the GPU ("Adreno (TM) 840 (turnip)", 1520x952 swapchain), but the game then idles at
+~7 % CPU waiting for the Steam API: ARM64 `lsteamclient` needs an arm64 `steamclient.so` and the client here is x86-64 under
+FEX. Running the *Windows* Steam client inside the prefix gets as far as the login window; its CEF web helper does not run.
+Plain x86 Wine under FEX is a dead end: 32-bit WOW64 fails ("could not load kernel32") and GUI apps hang after winex11.drv
+initialises. Scripts: `design/thermal-20260920/` for the caps used during the tests; notes in the memory of this work.
+
 ## Layout
 - `design/nextboot-impl/` — bring-up orchestrator, bundle builder/loader, guards (bootguard, registry), DRM helpers
 - `design/desktop-20260919/`, `design/desktop-service-20260919/` — presenter, Wayland client code (screencopy, output

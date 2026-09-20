@@ -7,4 +7,7 @@ Icon=/home/siwal/y700-steam/launcher/usr/share/icons/hicolor/256x256/apps/steam.
 Categories=Game;
 X-Purism-FormFactor=Workstation;Mobile;
 Terminal=false
+# hidden from the app grid: its library is separate from the arm64 client's, so a game installed there shows up
+# here as "not installed" and a tap re-downloads it into the wrong library. Still launchable from a terminal.
+NoDisplay=true
 StartupWMClass=steam

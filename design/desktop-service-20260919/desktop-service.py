@@ -83,6 +83,39 @@ def resolution_config():
     return (pct,) + RESOLUTIONS[pct] if pct in RESOLUTIONS else (100,) + RESOLUTIONS[100]
 
 GEM_CLOSE = (1 << 30) | (8 << 16) | (ord('d') << 8) | 0x09    # DRM_IOW(0x09, struct drm_gem_close {u32 handle, pad})
+PRIME_FD_TO_HANDLE = (3 << 30) | (12 << 16) | (ord('d') << 8) | 0x2E   # DRM_IOWR(0x2E, struct drm_prime_handle)
+DMA_HEAP_ALLOC = 0xC0184800                                   # _IOWR('H', 0, struct dma_heap_allocation_data)
+DMA_BUF_SYNC = (1 << 30) | (8 << 16) | (ord('b') << 8) | 0    # _IOW('b', 0, struct dma_buf_sync {u64 flags})
+DMA_BUF_SYNC_WRITE, DMA_BUF_SYNC_END = 2, 4
+HEAP = Path('/dev/dma_heap/system')
+
+def heap_fb(drm_fd, w, h, pitch=None):
+    """A scanout buffer the compositor can paint into directly: allocate from the vendor dma-buf heap, import it into
+    DRM (PRIME) for the framebuffer, and keep the dma-buf fd so it can also be handed to wl_shm. Same dict shape as
+    drmkms.dumb_fb plus 'dmabuf'."""
+    import mmap as _mmap
+    pitch = pitch or w * 4
+    size = pitch * h
+    hfd = os.open(HEAP, os.O_RDWR | os.O_CLOEXEC)
+    try:
+        req = bytearray(struct.pack('<QIIQ', size, 0, os.O_RDWR | os.O_CLOEXEC, 0))
+        fcntl.ioctl(hfd, DMA_HEAP_ALLOC, req, True)
+    finally:
+        os.close(hfd)
+    dfd = struct.unpack_from('<I', req, 8)[0]
+    try:
+        ph = bytearray(struct.pack('<IIi', 0, 0, dfd))
+        fcntl.ioctl(drm_fd, PRIME_FD_TO_HANDLE, ph, True)
+        handle = struct.unpack_from('<I', ph, 0)[0]
+        m = _mmap.mmap(dfd, size, _mmap.MAP_SHARED, _mmap.PROT_READ | _mmap.PROT_WRITE)
+    except OSError:
+        os.close(dfd); raise
+    return {'handle': handle, 'pitch': pitch, 'size': size, 'map': m, 'dmabuf': dfd,
+            'addr': ctypes.addressof(ctypes.c_char.from_buffer(m))}
+
+def dma_flush(dfd):
+    """the compositor wrote into this cached buffer with the CPU; flush before the display reads it by DMA"""
+    fcntl.ioctl(dfd, DMA_BUF_SYNC, struct.pack('<Q', DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE))
 
 def add_fb_noleak(fd, w, h, handle, pitch):
     """drmkms.add_fb without its handle leak: GETFB2 called by root on a master file creates a NEW GEM handle for the
@@ -253,6 +286,19 @@ def prepare_gpu_node():
     p = Path('/dev/kgsl-3d0'); st = os.stat(p)
     if not stat.S_ISCHR(st.st_mode): raise Precondition('/dev/kgsl-3d0 is not a character device')
     if stat.S_IMODE(st.st_mode) != 0o666: os.chmod(p, 0o666); log('GPU /dev/kgsl-3d0 -> 0666')
+    # the vendor dma-buf heaps are registered by the kernel but nothing creates/opens their nodes for the user here
+    # (no ueventd): with /dev/dma_heap/system unreadable, turnip drops VK_KHR_external_memory_fd and
+    # VK_EXT_external_memory_dma_buf ("Unable to open neither /dev/dma_heap/system nor /dev/ion")
+    h = Path('/dev/dma_heap/system'); sysfs = Path('/sys/class/dma_heap/system/dev')
+    try:
+        if not h.exists() and sysfs.exists():
+            ma, mi = (int(x) for x in sysfs.read_text().strip().split(':'))
+            h.parent.mkdir(parents=True, exist_ok=True)
+            os.mknod(h, 0o666 | stat.S_IFCHR, os.makedev(ma, mi)); log('DMA-BUF heap node created', h)
+        if h.exists() and stat.S_IMODE(os.stat(h).st_mode) != 0o666:
+            os.chmod(h, 0o666); log('DMA-BUF /dev/dma_heap/system -> 0666')
+    except OSError as e:
+        log('DMA-BUF heap setup failed (not fatal)', repr(e))
 
 def recover(reg, boot):
     """Bring the screen back to the native layout if a previous instance of this service left its FBs on it."""
@@ -394,19 +440,44 @@ def main():
     # only while this very process is alive and every desktop plane shows one of the fbs listed here
     rec = {'boot_id': boot, 'owner': {'pid': reg['owner']['pid'], 'starttime': reg['owner']['starttime']}, 'fbs': [], 'handles': [], 'started': time.time(),
            'presenter': {'pid': os.getpid(), 'starttime': c.task_stat(c.read('/proc/self/stat'))['starttime']}}
+    # zero copy: the framebuffers come from the dma-buf heap so the same memory can be handed to wl_shm and the
+    # compositor paints the frame straight into the buffer the panel scans out (no per-frame copy here)
+    zc = {'on': bool(desktop_conf().get('presenter_zerocopy', False)) and HEAP.exists(), 'target': None, 'used': False}
     def alloc(rw, rh):
         """two rw x rh XR24 framebuffers, recorded in fbs.json before they can reach the screen"""
         out = []
         for _ in range(2):
-            d = k.dumb_fb(fd, rw, rh); d['w'], d['h'] = rw, rh; out.append(d); allfbs.append(d)
-            rec['handles'].append(d['handle']); write_json(STATE/'fbs.json', rec)
-            d['fb'], extra = add_fb_noleak(fd, rw, rh, d['handle'], d['pitch']); rec['fbs'].append(d['fb']); write_json(STATE/'fbs.json', rec)
+            d = None
+            if zc['on']:
+                # the heap buffer must also be acceptable as a framebuffer (pitch/alignment): if anything on that path
+                # fails, drop back to a dumb buffer and to copying, rather than leaving the screen without one
+                try:
+                    d = heap_fb(fd, rw, rh)
+                    rec['handles'].append(d['handle']); write_json(STATE/'fbs.json', rec)
+                    d['fb'], extra = add_fb_noleak(fd, rw, rh, d['handle'], d['pitch'])
+                except (OSError, RuntimeError) as e:
+                    zc['on'] = False; log('ZEROCOPY unavailable, using dumb buffers:', repr(e))
+                    if d is not None:
+                        if d['handle'] in rec['handles']: rec['handles'].remove(d['handle'])
+                        try: d['map'].close(); os.close(d['dmabuf'])
+                        except OSError: pass
+                        d = None
+            if d is None:
+                d = k.dumb_fb(fd, rw, rh)
+                rec['handles'].append(d['handle']); write_json(STATE/'fbs.json', rec)
+                d['fb'], extra = add_fb_noleak(fd, rw, rh, d['handle'], d['pitch'])
+            d['w'], d['h'] = rw, rh; out.append(d); allfbs.append(d)
+            rec['fbs'].append(d['fb']); write_json(STATE/'fbs.json', rec)
             ctypes.memset(d['addr'], 0, d['size'])
         log('FBS', [(d['fb'], d['handle'], '%dx%d' % (rw, rh)) for d in out]); return out
     def free(ds):
         """only for framebuffers that are no longer on a plane"""
         e = []; remove_fbs(fd, [d['fb'] for d in ds if 'fb' in d], [d['handle'] for d in ds], e)
         for d in ds:
+            if d.get('wlbuf'): conn.send(d['wlbuf'], 0)                       # wl_buffer.destroy
+            if d.get('dmabuf') is not None:
+                try: d['map'].close(); os.close(d['dmabuf'])
+                except OSError as ex: e.append(repr(ex))
             if d in allfbs: allfbs.remove(d)
             if d.get('fb') in rec['fbs']: rec['fbs'].remove(d['fb'])
             if d['handle'] in rec['handles']: rec['handles'].remove(d['handle'])
@@ -468,6 +539,20 @@ def main():
             lp = labwc_pid(lab.pid)
             if lp: os.kill(lp, signal.SIGHUP); log('LABWC reconfigure (touch calibration) pid', lp)
         cap = wlcapture.Capturer(conn, reg_id, globs)
+        def zc_provider(w, h_, stride, fmt):
+            """destination for the next screencopy: the back framebuffer itself, or None to let the capturer use its
+            own buffer (then the loop copies as before)"""
+            d = zc['target']
+            if not zc['on'] or d is None or (w, h_) != (d['w'], d['h']) or stride != d['pitch'] \
+                    or fmt != wlcapture.WL_SHM_FORMAT_XRGB8888 or d.get('dmabuf') is None:
+                zc['used'] = False; return None
+            if not d.get('wlbuf'):
+                pool = conn.new_id(); conn.send(cap.shm, 0, struct.pack('<Ii', pool, d['size']), fds=[d['dmabuf']])
+                b = conn.new_id(); conn.send(pool, 0, struct.pack('<Iiiiii', b, 0, w, h_, d['pitch'], fmt))
+                conn.send(pool, 1); d['wlbuf'] = b
+                log('ZEROCOPY wl_shm buffer', b, 'on fb', d['fb'], '%dx%d pitch %d' % (w, h_, d['pitch']))
+            zc['used'] = True; return d['wlbuf'], d['map']
+        if zc['on']: cap.provider = zc_provider
         state = {'rot': rot}
         T2DEG = {0: 0, 1: 90, 2: 180, 3: 270}
         head = [h for h in outs.heads.values() if h.get('name') == 'HEADLESS-1'][0]
@@ -519,12 +604,16 @@ def main():
             if time.monotonic() - t_in >= 1.0: pads.sync(); inodes.sync(); t_in = time.monotonic()
             deg = T2DEG.get(head.get('transform'))
             if deg is not None and deg != state['rot']: follow_rotation(deg); log('ROTATION by the shell ->', deg)
+            zc['target'] = S['fbs'][back]                                    # where the compositor should paint next
             try: buf, info = cap.capture(damage=not S['first'], timeout=0.25)
             except TimeoutError: buf = None
             if buf is not None and (info['w'], info['h']) == (S['w'], S['h']):   # frames of a previous mode are skipped
                 rw, rh = S['w'], S['h']; d = S['fbs'][back]; st, pitch = info['stride'], d['pitch']; tc = time.perf_counter()
-                dst = memoryview(d['map']); rowb = rw * 4
-                for y in range(rh): dst[y * pitch:y * pitch + rowb] = buf[y * st:y * st + rowb]
+                if zc['used']:
+                    dma_flush(d['dmabuf'])                                   # cached heap memory: flush before scanout
+                else:
+                    dst = memoryview(d['map']); rowb = rw * 4
+                    for y in range(rh): dst[y * pitch:y * pitch + rowb] = buf[y * st:y * st + rowb]
                 copy_ms += (time.perf_counter() - tc) * 1e3
                 props = planes_for(fd, reg, d['fb'], rw, rh); objs = list(props)
                 if S['first']: k.atomic(fd, k.ATOMIC_TEST_ONLY, objs, props)
@@ -542,7 +631,8 @@ def main():
                 el = time.monotonic() - t_stat; u = rg.underruns(c, reg['encoder_status'])
                 lines = c.dmesg().splitlines(); new = [l for l in lines if l not in dm_seen]; dm_seen.update(new)
                 faults = [l for l in new if bg.FAULT.search(l)]
-                status = {'t': time.time(), 'frames': n, 'fps': round((n - n0) / el, 1), 'copy_ms_avg': round(copy_ms / max(n - n0, 1), 2),
+                status = {'t': time.time(), 'frames': n, 'fps': round((n - n0) / el, 1), 'zerocopy': bool(zc['on'] and zc['used']),
+                          'copy_ms_avg': round(copy_ms / max(n - n0, 1), 2),
                           'underruns_total': {i: u[i] - u_base[i] for i in u}, 'new_faults': faults[:10]}
                 write_json(STATE/'status.json', status); sp = AGENT/('desktop-status-%s.json' % boot[:8]); write_json(sp, status); os.chown(sp, 1000, 1000)
                 log('STATUS', json.dumps(status) if not faults else 'WARNING kernel fault lines: ' + json.dumps(status))

@@ -9,5 +9,6 @@
  "x_guard_classes": [
   "steam"
  ],
- "x_guard_grace": 2.0
+ "x_guard_grace": 2.0,
+ "presenter_zerocopy": true
 }

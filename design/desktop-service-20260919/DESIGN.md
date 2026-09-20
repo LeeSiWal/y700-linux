@@ -116,3 +116,16 @@ Later, separate: on-screen keyboard / launcher packages (apt), Steam.
   x_guard_grace (2 s) closes the window on top with WM_DELETE_WINDOW - only for WM_CLASSes in x_guard_classes
   (default ["steam"]). desktop.json x_guard: "close" (default) | "warn" (log only) | "off". test_xguard.py 11 OK,
   plus a live check against the real server (two managed windows of one class: only the one on top is closed).
+- 2026-09-21 dma-buf heaps: the kernel registers them (/sys/class/dma_heap: system, qcom,system, qcom,display, ...)
+  but nothing creates or opens the nodes here (no ueventd), so /dev/dma_heap/system was root-only and turnip dropped
+  VK_KHR_external_memory_fd / VK_EXT_external_memory_dma_buf ("Unable to open neither /dev/dma_heap/system nor
+  /dev/ion"). prepare_gpu_node() now creates the node from sysfs if missing and keeps it 0666, like /dev/kgsl-3d0.
+- 2026-09-21 presenter zero copy (desktop.json presenter_zerocopy, default off): the two scanout framebuffers are
+  allocated from that heap, imported into DRM with PRIME_FD_TO_HANDLE + ADDFB2, and the SAME dma-buf fd is handed to
+  wl_shm, so zwlr_screencopy paints the frame straight into the buffer the panel scans out - the per-frame row copy
+  (0.5-1.3 ms, a full 5.8 MB pass) disappears; DMA_BUF_IOCTL_SYNC(END|WRITE) flushes the cached heap memory before the
+  flip. wlcapture.Capturer gained an optional provider() that supplies the destination buffer. Any failure on that
+  path (heap, PRIME, ADDFB2, geometry or stride mismatch) falls back to dumb buffers + copying and logs why.
+  Measured while playing: presenter 53.5 fps, copy_ms_avg 0.01, underruns 0 (before: 3-22 fps, copy 0.5-1.3 ms).
+- 2026-09-21 the x86 Steam launcher is hidden from the app grid (NoDisplay): its library is separate from the arm64
+  client, so a game installed there shows as "not installed" and a tap re-downloads it into the wrong library.

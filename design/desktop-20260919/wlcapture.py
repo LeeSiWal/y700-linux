@@ -46,7 +46,9 @@ class Outputs:
 
 class Capturer:
     """One reusable wl_shm buffer; capture(damage=True) returns (memoryview of the frame, info)."""
-    def __init__(self, conn, reg, globs, output_name='HEADLESS-1'):
+    def __init__(self, conn, reg, globs, output_name='HEADLESS-1', provider=None):
+        # provider(w, h, stride, fmt) -> (wl_buffer id, mmap): lets the caller supply the destination buffer, so the
+        # compositor can copy straight into a scanout framebuffer instead of into a buffer we then copy again
         self.c = conn
         n, v = globs['zwlr_screencopy_manager_v1'][0]; self.mgr = wl.bind(conn, reg, n, 'zwlr_screencopy_manager_v1', min(v, 3))
         n, v = globs['wl_shm'][0]; self.shm = wl.bind(conn, reg, n, 'wl_shm', 1)
@@ -57,7 +59,7 @@ class Capturer:
             conn.roundtrip()
             if names and names[0] == output_name: self.output = o
         if self.output is None: raise RuntimeError('output %s not found' % output_name)
-        self.buf = None; self.geom = None; self.pending = None
+        self.buf = None; self.geom = None; self.pending = None; self.provider = provider
     def _alloc(self, w, h, stride, fmt):
         size = stride * h; fd = os.memfd_create('y700-presenter', os.MFD_CLOEXEC); os.ftruncate(fd, size)
         pool = self.c.new_id(); self.c.send(self.shm, 0, struct.pack('<Ii', pool, size), fds=[fd])   # create_pool(id, fd, size)
@@ -82,7 +84,9 @@ class Capturer:
             if st.get('failed'): raise RuntimeError('capture failed')
             shm = [b for b in st['buffers'] if b[0] == WL_SHM_FORMAT_XRGB8888] or st['buffers']
             fmt, w, h_, stride = shm[0]
-            if self.geom != (w, h_, stride, fmt): self._alloc(w, h_, stride, fmt)
+            got = self.provider(w, h_, stride, fmt) if self.provider is not None else None
+            if got is not None: self.buf, self.map = got; self.geom = (w, h_, stride, fmt)    # straight into a scanout fb
+            elif self.geom != (w, h_, stride, fmt) or self.buf is None: self._alloc(w, h_, stride, fmt)
             self.c.send(fr, 2 if damage else 0, struct.pack('<I', self.buf))                        # copy_with_damage / copy
         while not (st.get('ready') or st.get('failed')):
             if time.monotonic() - t0 > timeout:

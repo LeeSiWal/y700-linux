@@ -4,7 +4,7 @@
  "touch_offsets": {
   "270": 180
  },
- "resolution": 50,
+ "resolution": 80,
  "x_guard": "close",
  "x_guard_classes": [
   "steam"

@@ -64,7 +64,7 @@ What the wrapper adds on top of the environment Steam passes:
 | `Y700_FEX_TSO` | `0` | x86 memory-ordering emulation. On (Valve's default) this game ran single-threaded at 100 % CPU, 2-6 fps, GPU idle, with the wine log full of `Handled unaligned atomic` traps. Off: 60-78 fps, GPU ~80 %. It weakens ordering guarantees, so set `1` if a game misbehaves. |
 | `Y700_FEX_MULTIBLOCK` | `1` | larger FEX translation blocks |
 | `Y700_FPS_CAP` | `0` (off) | DXVK's limiter derives pacing from swapchain timing, which the software WSI path reports wrongly here: `dxgi.maxFrameRate = 40` measured **1.9 fps**. Cap in-engine instead. |
-| `Y700_OSK` | `off` | wine's `tabtip.exe` keeps popping phosh's on-screen keyboard over the game through the Wayland text-input protocol; the OSK is disabled for the run and restored afterwards. |
+| `Y700_OSK` | `ignore` | wine's `tabtip.exe` keeps unfolding phosh's on-screen keyboard over the game through the Wayland text-input protocol. The game's app-id (`steam_app_<id>`) is added to phosh's `sm.puri.phosh.osk ignore-activation` list, so the OSK no longer unfolds by itself for that game and stays available everywhere else (including Steam's own text fields). Nothing to restore if the process is killed. `keep` skips it. |
 | - | `dxgi.syncInterval = 0` | FIFO/vsync presents fall back to a ~1 s timer on this WSI path (0.8 fps, and the game's loading is gated on it). |
 | - | `LD_PRELOAD` rebuilt | Steam prepends its x86 overlay libraries and joins the list without a separator, which swallows the entry after it - including `sysvipc-emu`. |
 | - | `VK_DRIVER_FILES`, `MESA_VK_WSI_DEBUG=sw` | turnip on KGSL, software present path (no DRI3/dma-buf here) |

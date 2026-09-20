@@ -53,15 +53,21 @@ echo "  LD_PRELOAD=$LD_PRELOAD" >> "$L"
 
 env | grep -E '^(STEAM_COMPAT|SteamAppId|SteamGameId|VK_|LD_LIBRARY_PATH=|DISPLAY|WAYLAND|XDG_RUNTIME)' | sed 's/^/  env /' >> "$L"
 # wine runs tabtip.exe (the Windows touch keyboard) in the prefix; through the Wayland text-input protocol it keeps
-# popping phosh's on-screen keyboard over the game. Turn the OSK off for the run and put it back afterwards.
-osk_restore() { [ -n "$osk_was" ] && gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled "$osk_was" 2>/dev/null; }
-osk_was=
-if [ "${Y700_OSK:-off}" = off ]; then
-  osk_was=$(gsettings get org.gnome.desktop.a11y.applications screen-keyboard-enabled 2>/dev/null)
-  [ -n "$osk_was" ] && gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled false 2>/dev/null
-  trap 'osk_restore' EXIT INT TERM
+# unfolding phosh's on-screen keyboard over the game. phosh has a per-app list for exactly this, so the game's app-id
+# is added to it instead of turning the OSK off globally (nothing to restore if this process is killed, and the
+# keyboard stays available everywhere else, including Steam's own text fields). Y700_OSK=keep skips it.
+if [ "${Y700_OSK:-ignore}" != keep ] && [ -n "$SteamAppId" ]; then
+  python3 - "$SteamAppId" <<'EOF' >> "$L" 2>&1 || true
+import subprocess, sys
+SCHEMA, KEY = 'sm.puri.phosh.osk', 'ignore-activation'
+app = 'steam_app_' + sys.argv[1]
+cur = subprocess.run(['gsettings', 'get', SCHEMA, KEY], capture_output=True, text=True).stdout.strip()
+if cur.startswith('[') and app not in cur:
+    items = [x for x in cur.strip('[]').replace("'", '').split(', ') if x] + [app]
+    val = '[%s]' % ', '.join("'%s'" % i for i in items)
+    r = subprocess.run(['gsettings', 'set', SCHEMA, KEY, val], capture_output=True, text=True)
+    print('  OSK auto-unfold disabled for %s (rc %d %s)' % (app, r.returncode, r.stderr.strip()))
+EOF
 fi
-"$P/proton" "$verb" "$@" >> "$L" 2>&1
-rc=$?
-osk_restore
-exit $rc
+
+exec "$P/proton" "$verb" "$@" >> "$L" 2>&1
